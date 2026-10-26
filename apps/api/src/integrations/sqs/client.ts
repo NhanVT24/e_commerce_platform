@@ -1,9 +1,10 @@
 import { SQSClient } from "@aws-sdk/client-sqs";
-import { env } from "../../config/env.js";
+import { awsConfig } from "../../config/aws-config.js";
+import { databaseConfig } from "../../config/database-config.js";
 
 export const sqsClient = new SQSClient({
-  region: env.AWS_REGION,
-  credentials: env.DYNAMODB_ENDPOINT
-    ? { accessKeyId: env.AWS_ACCESS_KEY_ID, secretAccessKey: env.AWS_SECRET_ACCESS_KEY }
+  region: awsConfig.AWS_REGION,
+  credentials: databaseConfig.DYNAMODB_ENDPOINT
+    ? { accessKeyId: awsConfig.AWS_ACCESS_KEY_ID, secretAccessKey: awsConfig.AWS_SECRET_ACCESS_KEY }
     : undefined
 });

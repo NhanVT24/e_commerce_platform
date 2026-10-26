@@ -2,12 +2,12 @@ import { normalizeAddresses, type UserAddress } from "./user-address.js";
 export type { UserAddress } from "./user-address.js";
 import { GetItemCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
-import { env } from "../../../config/env.js";
+import { databaseConfig } from "../../../config/database-config.js";
 import { rawDb } from "../../../database/dynamodb/client.js";
 import { keys } from "../../../database/dynamodb/keys.js";
 import { normalizePermissions, type ProductPermission } from "../../../common/auth/permissions.js";
 
-const TableName = env.DYNAMODB_TABLE_NAME;
+const TableName = databaseConfig.DYNAMODB_TABLE_NAME;
 import { normalizeUserAccountStatus, type UserAccountStatus } from "./domain/account-status.js";
 export { normalizeUserAccountStatus } from "./domain/account-status.js";
 export type { UserAccountStatus } from "./domain/account-status.js";

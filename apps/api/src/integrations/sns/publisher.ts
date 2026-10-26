@@ -1,5 +1,5 @@
 import { PublishCommand } from "@aws-sdk/client-sns";
-import { env } from "../../config/env.js";
+import { operationsConfig } from "../../config/operations-config.js";
 import { snsClient } from "./client.js";
 
 type PublishAdminAlertInput = {
@@ -9,7 +9,7 @@ type PublishAdminAlertInput = {
 };
 
 export async function publishAdminAlert(input: PublishAdminAlertInput) {
-  const topicArn = env.SNS_ADMIN_ALERTS_TOPIC_ARN?.trim();
+  const topicArn = operationsConfig.SNS_ADMIN_ALERTS_TOPIC_ARN?.trim();
   if (!topicArn) {
     throw new Error("Missing SNS_ADMIN_ALERTS_TOPIC_ARN.");
   }

@@ -1,4 +1,5 @@
 import "reflect-metadata";
+import { databaseConfig } from "../src/config/database-config.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { DynamoDBClient, TransactWriteItemsCommandInput, UpdateItemCommandInput } from "@aws-sdk/client-dynamodb";
@@ -17,7 +18,6 @@ import { DynamoProductCounterRepository } from "../src/modules/shopping/infrastr
 import { DynamoProductCreator } from "../src/modules/shopping/infrastructure/persistence/dynamo-product-creator.js";
 import { DynamoProductDeleter } from "../src/modules/shopping/infrastructure/persistence/dynamo-product-deleter.js";
 import { rawDb } from "../src/database/dynamodb/client.js";
-import { env } from "../src/config/env.js";
 import { auditContext } from "../src/modules/audit-log/audit-context.js";
 
 const id = "10000000-0000-4000-8000-000000000001";
@@ -237,7 +237,7 @@ const incrementInput = { id, field: "stock" as const, incrementBy: -15, nextValu
   status: "low_stock" as const, expectedVersion: 1, expectedOwnerId: "owner" };
 
 test("counter adapter fixes soldCount alert metadata and preserves stock reset/index/response", async () => {
-  const db = transport(rawDb, env.DYNAMODB_TABLE_NAME);
+  const db = transport(rawDb, databaseConfig.DYNAMODB_TABLE_NAME);
   try {
     const adapter = new DynamoProductCounterRepository();
     const sold = await adapter.increment({ ...incrementInput, field: "soldCount", incrementBy: 2, nextValue: 5, status: "active" });
@@ -257,7 +257,7 @@ test("counter adapter fixes soldCount alert metadata and preserves stock reset/i
 });
 
 test("counter adapter rejects competing version/owner and preserves infrastructure errors", async () => {
-  const db = transport(rawDb, env.DYNAMODB_TABLE_NAME);
+  const db = transport(rawDb, databaseConfig.DYNAMODB_TABLE_NAME);
   try {
     const adapter = new DynamoProductCounterRepository();
     const results = await Promise.allSettled([adapter.increment(incrementInput), adapter.increment(incrementInput)]);
@@ -276,7 +276,7 @@ test("counter adapter rejects competing version/owner and preserves infrastructu
 });
 
 test("create adapter preserves response shape, atomic product/index payload and trusted identity", async () => {
-  const db = transport(rawDb, env.DYNAMODB_TABLE_NAME);
+  const db = transport(rawDb, databaseConfig.DYNAMODB_TABLE_NAME);
   db.setCurrent(null);
   try {
     const creator = new DynamoProductCreator();
@@ -302,7 +302,7 @@ test("create adapter preserves response shape, atomic product/index payload and 
 });
 
 test("delete preserves audited transaction and audit actor; failed transaction is safe to retry", async () => {
-  const db = transport(rawDb, env.DYNAMODB_TABLE_NAME);
+  const db = transport(rawDb, databaseConfig.DYNAMODB_TABLE_NAME);
   try {
     const adapter = new DynamoProductDeleter();
     const input = { id, expectedVersion: 1, expectedOwnerId: "owner" };
@@ -324,7 +324,7 @@ test("delete preserves audited transaction and audit actor; failed transaction i
 });
 
 test("delete marker failure does not run transaction; concurrent edit cannot delete/audit stale snapshot", async () => {
-  const db = transport(rawDb, env.DYNAMODB_TABLE_NAME);
+  const db = transport(rawDb, databaseConfig.DYNAMODB_TABLE_NAME);
   try {
     const adapter = new DynamoProductDeleter();
     const input = { id, expectedVersion: 1, expectedOwnerId: "owner" };
@@ -353,7 +353,7 @@ test("delete marker failure does not run transaction; concurrent edit cannot del
 });
 
 test("seed/reseed/increment compatibility exports still share adapter implementations", async () => {
-  const db = transport(rawDb, env.DYNAMODB_TABLE_NAME);
+  const db = transport(rawDb, databaseConfig.DYNAMODB_TABLE_NAME);
   try {
     const { createShoppingItem, incrementItemValue, deleteShoppingItem } = await import("../src/modules/shopping/shopping.repository.js");
     await incrementItemValue(id, "soldCount", 2, "owner");
@@ -374,8 +374,9 @@ test("compiled HTTP create/increment/delete enforce permission, schemas, ownersh
   const { AppExceptionFilter } = await import("../dist/src/common/filters/app-exception.filter.js");
   const { AuditMutationInterceptor } = await import("../dist/src/modules/audit-log/audit-mutation.interceptor.js");
   const { rawDb: compiledDb } = await import("../dist/src/database/dynamodb/client.js");
-  const { env: compiledEnv } = await import("../dist/src/config/env.js");
-  const db = transport(compiledDb, compiledEnv.DYNAMODB_TABLE_NAME);
+  const { identityConfig: compiledEnv } = await import("../dist/src/config/identity-config.js");
+  const { databaseConfig: compiledDatabaseConfig } = await import("../dist/src/config/database-config.js");
+  const db = transport(compiledDb, compiledDatabaseConfig.DYNAMODB_TABLE_NAME);
   const originalAuth = compiledEnv.AUTH_ALLOW_UNVERIFIED_JWT;
   compiledEnv.AUTH_ALLOW_UNVERIFIED_JWT = true;
   const app = await NestFactory.create(ShoppingModule, new FastifyAdapter(), { logger: false });

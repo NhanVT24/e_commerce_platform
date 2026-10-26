@@ -1,5 +1,5 @@
 import { CognitoJwtVerifier } from "aws-jwt-verify";
-import { env } from "../../config/env.js";
+import { identityConfig } from "../../config/identity-config.js";
 import { normalizePermissions, type ProductPermission } from "./permissions.js";
 
 type JwtPayload = {
@@ -12,10 +12,10 @@ type JwtPayload = {
   permissions?: unknown;
 };
 
-const verifier = env.COGNITO_USER_POOL_ID && env.COGNITO_CLIENT_ID
+const verifier = identityConfig.COGNITO_USER_POOL_ID && identityConfig.COGNITO_CLIENT_ID
   ? CognitoJwtVerifier.create({
-      userPoolId: env.COGNITO_USER_POOL_ID,
-      clientId: env.COGNITO_CLIENT_ID,
+      userPoolId: identityConfig.COGNITO_USER_POOL_ID,
+      clientId: identityConfig.COGNITO_CLIENT_ID,
       tokenUse: "access"
     })
   : null;
@@ -27,7 +27,7 @@ function toGroups(value: string | string[] | undefined) {
 }
 
 function decodeUnverifiedTestPayload(token: string): JwtPayload | null {
-  if (!env.AUTH_ALLOW_UNVERIFIED_JWT) return null;
+  if (!identityConfig.AUTH_ALLOW_UNVERIFIED_JWT) return null;
   try {
     const [, encodedPayload = ""] = token.split(".");
     return JSON.parse(Buffer.from(encodedPayload, "base64url").toString("utf8")) as JwtPayload;
@@ -59,7 +59,7 @@ export async function extractCognitoPrincipal(headers: Record<string, unknown>):
   if (!token) return null;
 
   try {
-    const payload = env.AUTH_ALLOW_UNVERIFIED_JWT
+    const payload = identityConfig.AUTH_ALLOW_UNVERIFIED_JWT
       ? decodeUnverifiedTestPayload(token)
       : verifier
         ? await verifier.verify(token) as JwtPayload

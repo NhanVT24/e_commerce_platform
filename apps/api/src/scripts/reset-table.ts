@@ -6,10 +6,10 @@ import {
   waitUntilTableNotExists,
   type CreateTableCommandInput
 } from "@aws-sdk/client-dynamodb";
-import { env } from "../config/env.js";
+import { databaseConfig } from "../config/database-config.js";
 import { rawDb } from "../database/dynamodb/client.js";
 
-const TableName = env.DYNAMODB_TABLE_NAME;
+const TableName = databaseConfig.DYNAMODB_TABLE_NAME;
 
 const tableDefinition: CreateTableCommandInput = {
   TableName,

@@ -1,6 +1,7 @@
 import { SendEmailCommand } from "@aws-sdk/client-sesv2";
 import crypto from "node:crypto";
-import { env } from "../../config/env.js";
+import { emailConfig } from "../../config/email-config.js";
+import { httpConfig } from "../../config/http-config.js";
 import {
   createPendingEmailDelivery,
   markEmailDeliveryAccepted,
@@ -72,7 +73,7 @@ async function sendTrackedOrderEmail(input: {
   emailId?: string;
 }) {
   assertSesConfigured();
-  if (!env.SES_INVENTORY_REPORT_CONFIGURATION_SET_NAME) throw new Error("Missing SES feedback configuration set.");
+  if (!emailConfig.SES_INVENTORY_REPORT_CONFIGURATION_SET_NAME) throw new Error("Missing SES feedback configuration set.");
   let email: Awaited<ReturnType<typeof createPendingEmailDelivery>>;
   try {
     email = await createPendingEmailDelivery({
@@ -97,8 +98,8 @@ async function sendTrackedOrderEmail(input: {
       FromEmailAddress: ordersSenderEmail(),
       ReplyToAddresses: replyToAddresses(),
       Destination: { ToAddresses: [input.toEmail] },
-      ...(env.SES_INVENTORY_REPORT_CONFIGURATION_SET_NAME
-        ? { ConfigurationSetName: env.SES_INVENTORY_REPORT_CONFIGURATION_SET_NAME }
+      ...(emailConfig.SES_INVENTORY_REPORT_CONFIGURATION_SET_NAME
+        ? { ConfigurationSetName: emailConfig.SES_INVENTORY_REPORT_CONFIGURATION_SET_NAME }
         : {}),
       EmailTags: sesTrackingTags({
         emailId: email.emailId,
@@ -227,8 +228,8 @@ function buildOrderFailureHtml(input: SendOrderFailureEmailInput) {
 }
 
 export async function sendOrderConfirmationEmail(input: OrderConfirmationInput) {
-  const orderUrl = env.STOREFRONT_PUBLIC_URL
-    ? new URL(`/store/orders/detail?orderId=${encodeURIComponent(input.orderId)}`, env.STOREFRONT_PUBLIC_URL).toString()
+  const orderUrl = httpConfig.STOREFRONT_PUBLIC_URL
+    ? new URL(`/store/orders/detail?orderId=${encodeURIComponent(input.orderId)}`, httpConfig.STOREFRONT_PUBLIC_URL).toString()
     : undefined;
   const content = orderConfirmationContent({ ...input, orderUrl });
   return sendTrackedOrderEmail({
@@ -267,8 +268,8 @@ export async function sendRefundStatusEmail(input: {
     }
   };
   const message = messages[input.status];
-  const orderUrl = env.STOREFRONT_PUBLIC_URL
-    ? new URL(`/store/orders/detail?orderId=${encodeURIComponent(input.orderId)}`, env.STOREFRONT_PUBLIC_URL).toString()
+  const orderUrl = httpConfig.STOREFRONT_PUBLIC_URL
+    ? new URL(`/store/orders/detail?orderId=${encodeURIComponent(input.orderId)}`, httpConfig.STOREFRONT_PUBLIC_URL).toString()
     : undefined;
   const detail = `${message.detail} Số tiền yêu cầu hoàn: ${formatCurrency(input.totalAmount)}.`;
   return sendTrackedOrderEmail({

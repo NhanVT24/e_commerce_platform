@@ -1,5 +1,5 @@
 import { SendEmailCommand } from "@aws-sdk/client-sesv2";
-import { env } from "../../config/env.js";
+import { emailConfig } from "../../config/email-config.js";
 import { sesClient } from "./client.js";
 
 type WeeklyRevenueSummary = {
@@ -26,11 +26,11 @@ type WeeklyRevenueSummary = {
 };
 
 function assertReportMailConfigured() {
-  if (!env.SES_FROM_EMAIL) {
+  if (!emailConfig.SES_FROM_EMAIL) {
     throw new Error("Missing SES_FROM_EMAIL configuration.");
   }
 
-  if (!env.ADMIN_REPORT_EMAIL) {
+  if (!emailConfig.ADMIN_REPORT_EMAIL) {
     throw new Error("Missing ADMIN_REPORT_EMAIL configuration.");
   }
 }
@@ -221,10 +221,10 @@ export async function sendWeeklyRevenueReportEmail(summary: WeeklyRevenueSummary
   assertReportMailConfigured();
 
   await sesClient.send(new SendEmailCommand({
-    FromEmailAddress: env.SES_FROM_EMAIL,
-    ReplyToAddresses: env.SES_REPLY_TO_EMAIL ? [env.SES_REPLY_TO_EMAIL] : undefined,
+    FromEmailAddress: emailConfig.SES_FROM_EMAIL,
+    ReplyToAddresses: emailConfig.SES_REPLY_TO_EMAIL ? [emailConfig.SES_REPLY_TO_EMAIL] : undefined,
     Destination: {
-      ToAddresses: [env.ADMIN_REPORT_EMAIL]
+      ToAddresses: [emailConfig.ADMIN_REPORT_EMAIL]
     },
     Content: {
       Simple: {

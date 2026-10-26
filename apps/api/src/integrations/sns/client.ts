@@ -1,6 +1,6 @@
 import { SNSClient } from "@aws-sdk/client-sns";
-import { env } from "../../config/env.js";
+import { awsConfig } from "../../config/aws-config.js";
 
 export const snsClient = new SNSClient({
-  region: env.AWS_REGION
+  region: awsConfig.AWS_REGION
 });

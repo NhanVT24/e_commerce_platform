@@ -36,7 +36,8 @@
     "db:seed": "npm run db:seed -w @supermarket/api",
     "db:backfill-product-category-index": "npm run db:backfill-product-category-index -w @supermarket/api",
     "db:localize": "npm run db:localize -w @supermarket/api",
-    "test:infra:inventory-outbox": "node scripts/test-inventory-outbox-infra.cjs"
+    "test:infra:inventory-outbox": "node scripts/test-inventory-outbox-infra.cjs",
+    "test:infra:lambda-config": "node scripts/test-lambda-config-infra.cjs"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",

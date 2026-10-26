@@ -1,5 +1,6 @@
 import { CreateScheduleCommand, DeleteScheduleCommand, SchedulerClient } from "@aws-sdk/client-scheduler";
-import { env } from "../../../config/env.js";
+import { awsConfig } from "../../../config/aws-config.js";
+import { operationsConfig } from "../../../config/operations-config.js";
 import { ApplicationError } from "../../../common/application/application-error.js";
 import * as repository from "../sales.repository.js";
 import { getShoppingItem } from "../../shopping/shopping.repository.js";
@@ -11,7 +12,7 @@ function toAtExpression(value: string) {
     }).formatToParts(new Date(value)).reduce<Record<string, string>>((result, part) => ({ ...result, [part.type]: part.value }), {});
     return `at(${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second})`;
 }
-const client = new SchedulerClient({ region: env.AWS_REGION });
+const client = new SchedulerClient({ region: awsConfig.AWS_REGION });
 async function conditional<T>(run: () => Promise<T>): Promise<T> {
     try {
         return await run();
@@ -34,12 +35,12 @@ export const campaignStore: CampaignStore = {
 };
 export const campaignProducts = { find: getShoppingItem };
 export class AwsCampaignSchedules implements CampaignSchedules {
-    assertReady() { if (!env.SALE_SCHEDULER_ROLE_ARN || !env.SALE_SCHEDULER_TARGET_ARN)
+    assertReady() { if (!operationsConfig.SALE_SCHEDULER_ROLE_ARN || !operationsConfig.SALE_SCHEDULER_TARGET_ARN)
         throw new ApplicationError("NOT_CONFIGURED", "Sale Scheduler is not configured."); }
     async create(campaignId: string, action: "start" | "end", at: string, name: string) {
-        await client.send(new CreateScheduleCommand({ Name: name, GroupName: env.SALE_SCHEDULER_GROUP_NAME,
+        await client.send(new CreateScheduleCommand({ Name: name, GroupName: operationsConfig.SALE_SCHEDULER_GROUP_NAME,
             ScheduleExpression: toAtExpression(at), ScheduleExpressionTimezone: "Asia/Ho_Chi_Minh", FlexibleTimeWindow: { Mode: "OFF" },
-            ActionAfterCompletion: "DELETE", Target: { Arn: env.SALE_SCHEDULER_TARGET_ARN!, RoleArn: env.SALE_SCHEDULER_ROLE_ARN!, Input: JSON.stringify({ campaignId, action }) } }));
+            ActionAfterCompletion: "DELETE", Target: { Arn: operationsConfig.SALE_SCHEDULER_TARGET_ARN!, RoleArn: operationsConfig.SALE_SCHEDULER_ROLE_ARN!, Input: JSON.stringify({ campaignId, action }) } }));
     }
-    async delete(name: string) { await client.send(new DeleteScheduleCommand({ Name: name, GroupName: env.SALE_SCHEDULER_GROUP_NAME })); }
+    async delete(name: string) { await client.send(new DeleteScheduleCommand({ Name: name, GroupName: operationsConfig.SALE_SCHEDULER_GROUP_NAME })); }
 }

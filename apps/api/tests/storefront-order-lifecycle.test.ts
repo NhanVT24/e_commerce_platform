@@ -372,7 +372,7 @@ test("compiled HTTP module wires cancel/refund/polling/job and keeps auth/error/
   const { AppExceptionFilter } = await import("../dist/src/common/filters/app-exception.filter.js");
   const { AuditMutationInterceptor } = await import("../dist/src/modules/audit-log/audit-mutation.interceptor.js");
   const { rawDb: compiledDb } = await import("../dist/src/database/dynamodb/client.js");
-  const { env } = await import("../dist/src/config/env.js");
+  const { identityConfig: env } = await import("../dist/src/config/identity-config.js");
   const db = transport(compiledDb);
   const authFlag = env.AUTH_ALLOW_UNVERIFIED_JWT;
   env.AUTH_ALLOW_UNVERIFIED_JWT = true;

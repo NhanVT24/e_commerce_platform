@@ -2,64 +2,65 @@ import { DescribeReplayCommand, PutEventsCommand, StartReplayCommand } from "@aw
 import { ChangeMessageVisibilityBatchCommand, DeleteMessageCommand, DeleteMessageBatchCommand, GetQueueAttributesCommand, ReceiveMessageCommand, SendMessageCommand } from "@aws-sdk/client-sqs";
 import { Logger } from "@nestjs/common";
 import crypto from "node:crypto";
-import { env } from "../../../config/env.js";
+import { eventbridgeConfig } from "../../../config/eventbridge-config.js";
+import { operationsConfig } from "../../../config/operations-config.js";
 import { eventBridgeClient } from "../../../integrations/eventbridge/client.js";
 import { sqsClient } from "../../../integrations/sqs/client.js";
 const queueConfig = {
     notifications: {
-        dlqUrl: env.SQS_NOTIFICATIONS_DLQ_URL,
+        dlqUrl: operationsConfig.SQS_NOTIFICATIONS_DLQ_URL,
         replayType: "sqs",
-        targetQueueUrl: env.SQS_NOTIFICATIONS_QUEUE_URL
+        targetQueueUrl: operationsConfig.SQS_NOTIFICATIONS_QUEUE_URL
     },
     storefrontOrders: {
-        dlqUrl: env.SQS_STOREFRONT_ORDERS_DLQ_URL,
+        dlqUrl: operationsConfig.SQS_STOREFRONT_ORDERS_DLQ_URL,
         replayType: "sqs",
-        targetQueueUrl: env.SQS_STOREFRONT_ORDERS_QUEUE_URL
+        targetQueueUrl: operationsConfig.SQS_STOREFRONT_ORDERS_QUEUE_URL
     },
     paymentEvents: {
-        dlqUrl: env.SQS_PAYMENT_EVENTS_DLQ_URL,
+        dlqUrl: operationsConfig.SQS_PAYMENT_EVENTS_DLQ_URL,
         replayType: "sqs",
-        targetQueueUrl: env.SQS_PAYMENT_EVENTS_QUEUE_URL
+        targetQueueUrl: operationsConfig.SQS_PAYMENT_EVENTS_QUEUE_URL
     },
     emailJobs: {
-        dlqUrl: env.SQS_EMAIL_JOBS_DLQ_URL,
+        dlqUrl: operationsConfig.SQS_EMAIL_JOBS_DLQ_URL,
         replayType: "sqs",
-        targetQueueUrl: env.SQS_EMAIL_JOBS_QUEUE_URL
+        targetQueueUrl: operationsConfig.SQS_EMAIL_JOBS_QUEUE_URL
     },
     imageUploads: {
-        dlqUrl: env.SQS_IMAGE_UPLOADS_DLQ_URL,
+        dlqUrl: operationsConfig.SQS_IMAGE_UPLOADS_DLQ_URL,
         replayType: "sqs",
-        targetQueueUrl: env.SQS_IMAGE_UPLOADS_QUEUE_URL
+        targetQueueUrl: operationsConfig.SQS_IMAGE_UPLOADS_QUEUE_URL
     },
     eventbridgeTargets: {
-        dlqUrl: env.SQS_EVENTBRIDGE_TARGET_DLQ_URL,
+        dlqUrl: operationsConfig.SQS_EVENTBRIDGE_TARGET_DLQ_URL,
         replayType: "eventbridge"
     },
     emailEventbridgeDelivery: {
-        dlqUrl: env.SQS_EMAIL_EVENTBRIDGE_DELIVERY_DLQ_URL,
+        dlqUrl: operationsConfig.SQS_EMAIL_EVENTBRIDGE_DELIVERY_DLQ_URL,
         replayType: "eventbridge"
     },
     auditLogWorker: {
-        dlqUrl: env.SQS_AUDIT_LOG_WORKER_DLQ_URL,
+        dlqUrl: operationsConfig.SQS_AUDIT_LOG_WORKER_DLQ_URL,
         replayType: "sqs",
-        targetQueueUrl: env.SQS_AUDIT_LOG_QUEUE_URL
+        targetQueueUrl: operationsConfig.SQS_AUDIT_LOG_QUEUE_URL
     }
 } as const;
 const archiveConfig = {
     commerce: {
         archiveName: "supermarket-commerce-archive",
-        archiveArn: env.EVENTBRIDGE_COMMERCE_ARCHIVE_ARN,
-        eventBusName: env.EVENTBRIDGE_COMMERCE_BUS_NAME
+        archiveArn: eventbridgeConfig.EVENTBRIDGE_COMMERCE_ARCHIVE_ARN,
+        eventBusName: eventbridgeConfig.EVENTBRIDGE_COMMERCE_BUS_NAME
     },
     payment: {
         archiveName: "supermarket-payment-archive",
-        archiveArn: env.EVENTBRIDGE_PAYMENT_ARCHIVE_ARN,
-        eventBusName: env.EVENTBRIDGE_PAYMENT_BUS_NAME
+        archiveArn: eventbridgeConfig.EVENTBRIDGE_PAYMENT_ARCHIVE_ARN,
+        eventBusName: eventbridgeConfig.EVENTBRIDGE_PAYMENT_BUS_NAME
     },
     platform: {
         archiveName: "supermarket-platform-archive",
-        archiveArn: env.EVENTBRIDGE_PLATFORM_ARCHIVE_ARN,
-        eventBusName: env.EVENTBRIDGE_PLATFORM_BUS_NAME
+        archiveArn: eventbridgeConfig.EVENTBRIDGE_PLATFORM_ARCHIVE_ARN,
+        eventBusName: eventbridgeConfig.EVENTBRIDGE_PLATFORM_BUS_NAME
     }
 } as const;
 type DlqKey = keyof typeof queueConfig;
@@ -89,7 +90,7 @@ function parseRuleArnForBusName(ruleArn?: string): string | undefined {
     if (segments.length >= 2) {
         return segments[0];
     }
-    return env.EVENTBRIDGE_DEFAULT_BUS_NAME?.trim() || undefined;
+    return eventbridgeConfig.EVENTBRIDGE_DEFAULT_BUS_NAME?.trim() || undefined;
 }
 function tryParseJson(value: string): unknown {
     try {
@@ -109,7 +110,7 @@ function eventBusArnFromArchiveArn(archiveArn: string, eventBusName: string): st
 export class AwsAdminGateway {
     keys() { return getDlqKeys(); }
     queue(key: DlqKey) { return queueConfig[key]; }
-    defaultBus() { return env.EVENTBRIDGE_DEFAULT_BUS_NAME?.trim(); }
+    defaultBus() { return eventbridgeConfig.EVENTBRIDGE_DEFAULT_BUS_NAME?.trim(); }
     async ackPublished(queueKey: DlqKey, entries: Array<{
         id: string;
         token: string;
@@ -262,7 +263,7 @@ export class AwsAdminGateway {
         testId?: string;
         requestedBy: string;
     }) {
-        const queueUrl = env.SQS_AUDIT_LOG_QUEUE_URL?.trim();
+        const queueUrl = operationsConfig.SQS_AUDIT_LOG_QUEUE_URL?.trim();
         if (!queueUrl) {
             throw new Error("SQS_AUDIT_LOG_QUEUE_URL is not configured.");
         }
@@ -360,7 +361,7 @@ export class AwsAdminGateway {
         }
         const detail = eventPayload.detail;
         const eventBusName = parseRuleArnForBusName(message.messageAttributes.RULE_ARN)
-            || env.EVENTBRIDGE_DEFAULT_BUS_NAME?.trim();
+            || eventbridgeConfig.EVENTBRIDGE_DEFAULT_BUS_NAME?.trim();
         if (!eventBusName) {
             throw new Error("Không xác định được EventBridge bus để replay.");
         }
@@ -395,7 +396,7 @@ export class AwsAdminGateway {
             return config.targetQueueUrl;
         }
         return parseRuleArnForBusName(message.messageAttributes.RULE_ARN)
-            || env.EVENTBRIDGE_DEFAULT_BUS_NAME?.trim()
+            || eventbridgeConfig.EVENTBRIDGE_DEFAULT_BUS_NAME?.trim()
             || "unknown-event-bus";
     }
     async receiveDlqMessages(queueKey: DlqKey, maxMessages: number, releaseAfterRead: boolean) {

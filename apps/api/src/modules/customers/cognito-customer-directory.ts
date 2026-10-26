@@ -1,7 +1,8 @@
 import { CognitoIdentityProviderClient, ListUsersCommand, type AttributeType } from "@aws-sdk/client-cognito-identity-provider";
-import { env } from "../../config/env.js";
+import { awsConfig } from "../../config/aws-config.js";
+import { identityConfig } from "../../config/identity-config.js";
 
-const cognito = new CognitoIdentityProviderClient({ region: env.AWS_REGION });
+const cognito = new CognitoIdentityProviderClient({ region: awsConfig.AWS_REGION });
 
 function attribute(attributes: AttributeType[] | undefined, name: string) {
   return attributes?.find((item) => item.Name === name)?.Value?.trim() ?? "";
@@ -13,13 +14,13 @@ function escapeFilterValue(value: string) {
 
 
 export async function searchCustomerCandidates(search: string, limit: number) {
- if(!env.COGNITO_USER_POOL_ID) throw new Error("Missing COGNITO_USER_POOL_ID configuration.");
+ if(!identityConfig.COGNITO_USER_POOL_ID) throw new Error("Missing COGNITO_USER_POOL_ID configuration.");
   const filters = search
     ? [`email ^= "${escapeFilterValue(search)}"`, `name ^= "${escapeFilterValue(search)}"`]
     : [undefined];
 
   const pages = await Promise.all(filters.map((Filter) => cognito.send(new ListUsersCommand({
-    UserPoolId: env.COGNITO_USER_POOL_ID,
+    UserPoolId: identityConfig.COGNITO_USER_POOL_ID,
     Filter,
     // Cognito can return unverified accounts too, so request a little extra
     // before filtering them out locally.

@@ -69,7 +69,7 @@ test("password reset updates only its completion timestamp and does not hand-wri
 
 test("HTTP interceptor establishes actor context and blocks external operations when the initial ledger fails", async () => {
   const { rawDb } = await import("../src/database/dynamodb/client.js");
-  const { env } = await import("../src/config/env.js");
+  const { identityConfig: env } = await import("../src/config/identity-config.js");
   const { AuditMutationInterceptor } = await import("../src/modules/audit-log/audit-mutation.interceptor.js");
   const { lastValueFrom, defer } = await import("rxjs");
   const originalSend = rawDb.send;

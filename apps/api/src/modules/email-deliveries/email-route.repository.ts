@@ -6,10 +6,11 @@ import {
   type AttributeValue
 } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
-import { env } from "../../config/env.js";
+import { databaseConfig } from "../../config/database-config.js";
+import { emailConfig } from "../../config/email-config.js";
 import { rawDb } from "../../database/dynamodb/client.js";
 
-const TableName = env.DYNAMODB_TABLE_NAME;
+const TableName = databaseConfig.DYNAMODB_TABLE_NAME;
 const MAX_WATCHDOG_RESULTS = 100;
 const MAX_WATCHDOG_EVALUATED_ITEMS = 1_000;
 
@@ -97,7 +98,7 @@ export async function ensureEmailRoute(input: {
   };
 }) {
   const now = new Date().toISOString();
-  const publishLeaseUntil = new Date(Date.now() + env.EMAIL_EVENT_PUBLISH_LEASE_SECONDS * 1_000).toISOString();
+  const publishLeaseUntil = new Date(Date.now() + emailConfig.EMAIL_EVENT_PUBLISH_LEASE_SECONDS * 1_000).toISOString();
   const record: EmailRouteRecord = {
     ...key(input.emailJobId),
     entityType: "EMAIL_ROUTE",

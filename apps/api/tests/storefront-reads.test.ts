@@ -159,7 +159,7 @@ test("compiled HTTP reads wire real adapters, hide private fields, enforce owner
   const { StorefrontModule } = await import("../dist/src/modules/storefront/storefront.module.js");
   const { AppExceptionFilter } = await import("../dist/src/common/filters/app-exception.filter.js");
   const { rawDb: compiledDb } = await import("../dist/src/database/dynamodb/client.js");
-  const { env } = await import("../dist/src/config/env.js");
+  const { identityConfig: env } = await import("../dist/src/config/identity-config.js");
   const { NotificationsService } = await import("../dist/src/modules/notifications/notifications.service.js");
   const previous = env.AUTH_ALLOW_UNVERIFIED_JWT, db = transport(compiledDb);
   env.AUTH_ALLOW_UNVERIFIED_JWT = true;

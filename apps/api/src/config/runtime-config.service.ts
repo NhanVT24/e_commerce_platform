@@ -1,5 +1,5 @@
 import { Injectable } from "@nestjs/common";
-import { env } from "./env.js";
+import { readPaymentConfig } from "./payment-config.js";
 
 type RuntimeConfig = {
   vnpayTmnCode: string;
@@ -22,15 +22,16 @@ export class RuntimeConfigService {
       return this.cachedConfig;
     }
 
+    const payment = readPaymentConfig();
     this.cachedConfig = {
       // In AWS these env vars are resolved from SSM-backed CDK dynamic references.
-      vnpayTmnCode: env.VNPAY_TMN_CODE,
-      vnpayHashSecret: env.VNPAY_HASH_SECRET,
-      vnpayPaymentUrl: env.VNPAY_PAYMENT_URL,
-      vnpayTransactionUrl: env.VNPAY_TRANSACTION_URL || undefined,
-      vnpayMerchantIp: env.VNPAY_MERCHANT_IP || undefined,
-      vnpayReturnUrl: env.VNPAY_RETURN_URL,
-      vnpayIpnUrl: env.VNPAY_IPN_URL
+      vnpayTmnCode: payment.VNPAY_TMN_CODE,
+      vnpayHashSecret: payment.VNPAY_HASH_SECRET,
+      vnpayPaymentUrl: payment.VNPAY_PAYMENT_URL,
+      vnpayTransactionUrl: payment.VNPAY_TRANSACTION_URL || undefined,
+      vnpayMerchantIp: payment.VNPAY_MERCHANT_IP || undefined,
+      vnpayReturnUrl: payment.VNPAY_RETURN_URL,
+      vnpayIpnUrl: payment.VNPAY_IPN_URL
     };
     this.cachedAt = Date.now();
 
