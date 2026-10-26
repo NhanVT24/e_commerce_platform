@@ -1,3 +1,4 @@
+import { env } from "../../config/env.js";
 import { ManagedProducts } from "./application/managed-products.js";
 import { managedProductReads } from "./infrastructure/persistence/managed-product-reads.js";
 import { Module } from "@nestjs/common";
@@ -27,14 +28,14 @@ import { DynamoProductDeleter } from "./infrastructure/persistence/dynamo-produc
       inject: [NotificationsService],
       useFactory: (notifications: NotificationsService) => new UpdateProduct(
         new DynamoProductWriteRepository(),
-        new NotificationsInventoryAlertPublisher(notifications)
+        new NotificationsInventoryAlertPublisher(notifications), env.INVENTORY_ALERT_OUTBOX_ENABLED ? "outbox" : "direct"
       )
     },
     {
       provide: IncrementProductField,
       inject: [NotificationsService],
       useFactory: (notifications: NotificationsService) => new IncrementProductField(
-        new DynamoProductCounterRepository(), new NotificationsInventoryAlertPublisher(notifications)
+        new DynamoProductCounterRepository(), new NotificationsInventoryAlertPublisher(notifications), env.INVENTORY_ALERT_OUTBOX_ENABLED ? "outbox" : "direct"
       )
     },
     {
