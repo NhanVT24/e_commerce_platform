@@ -3,6 +3,10 @@
 Ngày: 2026-10-22. Các thay đổi trong tài liệu này tiếp nối đợt migration Clean
 Architecture ngày 2026-10-21; kiểm chứng local, chưa deploy AWS.
 
+Cập nhật 2026-10-26: constructor của entity/value object chỉ nhận, copy hoặc
+chuẩn hóa dữ liệu; các invariant cần thiết được kiểm tra rõ ràng bằng assert,
+factory hoặc method nghiệp vụ trước khi phát sinh side effect.
+
 ## Quy tắc tổ chức
 
 - Entity giữ identity, business state và hành vi gắn với state đó.
@@ -81,8 +85,35 @@ Không dùng `product.increaseStock(2)` rồi tiếp tục lưu `product` cũ.
 `Product.create(id, ownerId, details)` là factory cho sản phẩm mới: nó validate
 stock, áp dụng defaults và gọi constructor. `new Product(snapshot)` dùng để hydrate
 state đã lưu, giữ stored status để các flow hiện tại vẫn phát hiện/repair projection
-lệch. Constructor từ chối counter không hợp lệ và version âm/không phải safe integer;
-nó không áp trần editable stock lên các counter đã tăng qua endpoint increment.
+lệch. Constructor không validate snapshot. `assertValidState()` chỉ kiểm tra
+counter/version cần cho safe writes; create/mutation/delete paths và product
+creation adapter gọi assert ở điểm cần thiết. Counter tăng qua endpoint increment
+vẫn không bị áp thêm trần editable stock.
+
+```ts
+const product = new Product(snapshot); // copy dữ liệu, không parse schema
+product.assertCanBeManagedBy(actor);
+product.assertVersion(expectedVersion);
+const next = product.update(changes); // assert invariant cần thiết trước mutation
+```
+
+Request schema kiểm tra dữ liệu vào; response schema kiểm tra cấu trúc dữ liệu
+ra. Chúng không thay thế rule trừ kho, quyền sở hữu, refund state hoặc atomic
+database conditions. Entity không chạy lại schema đầy đủ của request/response.
+
+| Điểm dựng object | Kiểm tra cần thiết được gọi ở đâu |
+| --- | --- |
+| `new Product(snapshot)` | `assertValidState()` và các assert theo hành động; factory/mutation methods bảo vệ invariant trước write |
+| `new SignUpEmail(email)` | `assertAllowedBy(policy)` trong PrepareSignUp và compatibility helper, trước unique/link calls |
+| `new ProfileChange(subject, patch)` | `assertAllowed()` trong UpdateProfile/UserProfile.update, trước storage lookup hoặc persistence |
+| `new OrderItems(items)` | Chỉ copy snapshot; `OrderItems.create(items)` kiểm tra/normalize cart mới. `assertValid()` dùng khi cần kiểm tra snapshot đã hydrate |
+| `new PaymentDraft(items)` | `assertValidItems()` trong CreatePayment, kể cả khi checkout đã cung cấp amount override |
+
+Nhờ vậy có thể hydrate dữ liệu để đọc/inspect mà không tự chạy validation trong
+constructor, nhưng không thể dùng các mutation flows được hỗ trợ để ghi counter
+âm, overflow hoặc bỏ qua avatar/sign-up/cart policy. Các method public tạo ra
+thay đổi phải giữ những invariant liên quan; không dựa vào việc caller có đi qua
+HTTP schema hay không.
 
 Database record, command, event và HTTP response vẫn có thể là interface/type.
 Chúng là dữ liệu truyền qua boundary, không phải entity cần prototype method.
@@ -156,3 +187,7 @@ Kết quả local: source/test typecheck pass; architecture check có 106 core f
 pass 167 tests. Thêm 5 DynamoDB Local engine tests pass, tổng 172 tests không skip.
 Container database test đã dừng và bảng tên ngẫu nhiên đã được xóa. Đây không
 phải kết quả AWS staging hoặc production.
+
+Các số liệu trên là snapshot của đợt 2026-10-22. Đợt 2026-10-26 bổ sung regression
+cho passive constructor, assert trước mutation/delete, kiểm tra payment items khi
+skip stock validation và từ chối invalid product creation trước database write.
