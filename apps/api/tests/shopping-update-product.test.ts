@@ -79,6 +79,13 @@ test("invalid stock/version/identity is rejected before persistence", async () =
   await assert.rejects(fixture().useCase.execute({ ...command, actor: { subject: "", isAdmin: true } }), hasCode("INVALID_INPUT"));
 });
 
+test("hydrating an invalid stored product is passive but its update cannot write or publish", async () => {
+  const f = fixture({ ...product, soldCount: -1 });
+  assert.ok(await f.repository.findById(id) instanceof Product);
+  await assert.rejects(f.useCase.execute(command), hasCode("INVALID_INPUT"));
+  assert.equal(f.writes.length, 0); assert.equal(f.alerts.length, 0);
+});
+
 test("alerts only on entering low/out status, including updates without a stock patch", async () => {
   for (const [current, changes, expectedAlerts] of [
     [product, { stock: 0 }, 1],

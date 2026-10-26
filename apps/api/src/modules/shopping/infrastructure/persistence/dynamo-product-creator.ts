@@ -56,6 +56,7 @@ export async function createProductRecord(input: ProductRecord, ownerSub: string
 
 export class DynamoProductCreator implements ProductCreator<ProductRecord> {
   async create(input: Parameters<ProductCreator<ProductRecord>["create"]>[0]) {
+    input.product.assertValidState();
     const { id, ownerId, version: _version, status: _status, ...details } = input.product.toSnapshot();
     try { return await createProductRecord(details, ownerId, { id, status: Product.stockStatus(input.product.stock),
       createdAt: input.createdAt, updatedAt: input.updatedAt }); }

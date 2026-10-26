@@ -2,6 +2,8 @@
 
 > Entity hiện giữ cả state và business behavior. Xem [rich domain model và flow Product](rich-domain-entities.md)
 > để biết cách dùng constructor, immutable methods và snapshot khi đọc/lưu dữ liệu.
+> Constructor chỉ nhận/copy dữ liệu; các invariant cần thiết được assert tại
+> factory hoặc hành động nghiệp vụ. Request/response schemas vẫn ở boundary.
 
 > Cập nhật Clean Architecture: xem [báo cáo migration toàn backend](clean-architecture-remaining-migration.md)
 > để biết application/domain/ports, composition và các technical exception hiện tại.

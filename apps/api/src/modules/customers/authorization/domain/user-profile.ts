@@ -24,21 +24,24 @@ export class UserProfile {
         }
     }
     update(patch: UserProfilePatch): UserProfile {
-        const changes = new ProfileChange(this.subject, patch).toSnapshot();
+        const change = new ProfileChange(this.subject, patch);
+        change.assertAllowed();
+        const changes = change.toSnapshot();
         return new UserProfile(this.subject, { ...this.#state, ...changes, addresses: changes.addresses ?? this.#state.addresses });
     }
 }
-/** Validated partial change; preserves patch semantics without reading and
+/** Partial change; preserves patch semantics without reading and
  * rewriting unrelated profile fields during concurrent HTTP updates.
  */
 export class ProfileChange {
     readonly #changes: Readonly<UserProfilePatch>;
-    constructor(subject: string, patch: UserProfilePatch) {
-        if (patch.avatarKey !== undefined)
-            UserProfile.assertAvatarKey(subject, patch.avatarKey);
+    constructor(private readonly subject: string, patch: UserProfilePatch) {
         this.#changes = Object.freeze({ ...patch, ...(patch.addresses === undefined ? {} : {
                 addresses: patch.addresses.map(address => ({ ...address, ward: { ...address.ward } }))
             }) });
+    }
+    assertAllowed(): void {
+        if (this.avatarKey !== undefined) UserProfile.assertAvatarKey(this.subject, this.avatarKey);
     }
     get avatarKey() { return this.#changes.avatarKey; }
     toSnapshot(): UserProfilePatch {
