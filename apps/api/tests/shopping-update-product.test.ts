@@ -31,7 +31,7 @@ function fixture(current: ProductSnapshot | null = product) {
     }
   };
   const publisher = { async publish(alert: InventoryStockAlert) { alerts.push(alert); } };
-  return { useCase: new UpdateProduct(repository, publisher), repository, publisher, alerts, writes, representation };
+  return { useCase: new UpdateProduct(repository, publisher, "direct"), repository, publisher, alerts, writes, representation };
 }
 
 test("stock policy keeps the exact 0/1/10/11 boundaries", () => {

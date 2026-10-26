@@ -15,7 +15,8 @@ export interface UpdateProductCommand {
 export class UpdateProduct<TResult> {
   constructor(
     private readonly products: ProductWriteRepository<TResult>,
-    private readonly alerts: InventoryAlertPublisher
+    private readonly alerts: InventoryAlertPublisher,
+    private readonly delivery: "direct" | "outbox" = "outbox"
   ) {}
 
   async execute(command: UpdateProductCommand): Promise<TResult> {
@@ -30,12 +31,14 @@ export class UpdateProduct<TResult> {
     assertCanManageProduct(current, actor);
     current.assertVersion(expectedVersion);
     const next = current.update(changes);
+    const transition = next.stockAlertSince(current);
     const saved = await this.products.update({
       id: productId, changes, status: next.stockStatus, expectedVersion,
-      expectedOwnerId: actor.isAdmin ? undefined : actor.subject
+      expectedOwnerId: actor.isAdmin ? undefined : actor.subject,
+      ...(this.delivery === "outbox" ? { inventoryAlert: transition ? { ...transition, source: "admin.update" as const } : undefined, changedBy: actor.subject } : {})
     });
     const alert = saved.product.stockAlertSince(current);
-    if (alert) {
+    if (alert && this.delivery === "direct") {
       // Preserve existing behavior: publish is awaited AFTER commit. A publish
       // failure propagates; this does not provide atomic delivery or safe retries.
       await this.alerts.publish({

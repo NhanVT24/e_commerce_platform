@@ -11,6 +11,7 @@ export const env = z.object({
   AWS_REGION: z.string().default("ap-southeast-1"),
   AWS_ACCESS_KEY_ID: z.string().default("local"),
   AWS_SECRET_ACCESS_KEY: z.string().default("local"),
+  INVENTORY_ALERT_OUTBOX_ENABLED: z.enum(["true", "false"]).default("false").transform(value => value === "true"),
   DYNAMODB_ENDPOINT: z.string().optional(),
   DYNAMODB_TABLE_NAME: z.string().default("MarketplaceProducts"),
   AUDIT_LOG_TABLE_NAME: z.string().optional(),

@@ -40,7 +40,7 @@ function incrementFixture(current: ProductSnapshot | null = snapshot) {
     }
   };
   const publisher = { async publish(alert: InventoryStockAlert) { alerts.push(alert); } };
-  return { repository, publisher, writes, alerts, useCase: new IncrementProductField(repository, publisher) };
+  return { repository, publisher, writes, alerts, useCase: new IncrementProductField(repository, publisher, "direct") };
 }
 
 test("counter policy preserves clamp and checks safe integer overflow without a new 999999 cap", () => {

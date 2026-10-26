@@ -1,3 +1,4 @@
+import type { InventoryStockAlert } from "./inventory-alert-publisher.js";
 import type { Product, ProductChanges, ProductStatus } from "../../domain/product.js";
 
 /**
@@ -19,5 +20,8 @@ export interface ProductWriteRepository<TResult> {
     status: ProductStatus;
     expectedVersion: number;
     expectedOwnerId?: string;
+    /** When present, commit this event in the SAME transaction as the mutation. */
+    inventoryAlert?: InventoryStockAlert;
+    changedBy?: string;
   }): Promise<{ product: Product; representation: TResult }>;
 }

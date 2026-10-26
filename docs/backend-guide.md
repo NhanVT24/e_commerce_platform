@@ -1,5 +1,8 @@
 # Hướng dẫn đọc Backend từ con số 0
 
+> Backend hardening mới: [Phase 1 — inventory transactional outbox](inventory-outbox-phase-1.md)
+> mô tả atomic write, relay/lease/retry, consumer dedup và rollout bằng feature flag.
+
 > Entity hiện giữ cả state và business behavior. Xem [rich domain model và flow Product](rich-domain-entities.md)
 > để biết cách dùng constructor, immutable methods và snapshot khi đọc/lưu dữ liệu.
 > Constructor chỉ nhận/copy dữ liệu; các invariant cần thiết được assert tại

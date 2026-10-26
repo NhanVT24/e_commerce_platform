@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { after, before, test } from "node:test";
-import { CreateTableCommand, DeleteTableCommand, GetItemCommand, ListTablesCommand, PutItemCommand, QueryCommand, waitUntilTableExists } from "@aws-sdk/client-dynamodb";
+import { CreateTableCommand, DeleteTableCommand, DeleteItemCommand, GetItemCommand, ListTablesCommand, PutItemCommand, QueryCommand, waitUntilTableExists } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 
 // Fail closed: this test creates and deletes a generated table, exclusively on loopback.
@@ -36,6 +36,13 @@ const { CompleteNotifiedOrder } = await import("../dist/src/modules/notification
 const { DynamoPaymentRecovery } = await import("../dist/src/modules/vnpay/infrastructure/dynamo-payment-recovery.js");
 const { DynamoProfiles } = await import("../dist/src/modules/customers/authorization/infrastructure/profile-adapters.js");
 const { Product } = await import("../dist/src/modules/shopping/domain/product.js");
+const { DynamoInventoryAlertOutbox } = await import("../dist/src/modules/shopping/infrastructure/persistence/inventory-alert-outbox.js");
+const { DynamoInventoryNotifications } = await import("../dist/src/modules/notifications/infrastructure/inventory-notifications.js");
+const { IncrementProductField } = await import("../dist/src/modules/shopping/application/increment-product-field/increment-product-field.js");
+const { DynamoProductCounterRepository } = await import("../dist/src/modules/shopping/infrastructure/persistence/dynamo-product-counter-repository.js");
+const { RelayInventoryAlerts } = await import("../dist/src/modules/shopping/application/relay-inventory-alerts.js");
+const { NotificationUseCases } = await import("../dist/src/modules/notifications/application/notifications.js");
+
 let created = false;
 const email = "integration@example.test", actor = { subject: "integration-owner", isAdmin: false };
 const read = async (PK, SK = "DETAIL") => {
@@ -126,6 +133,131 @@ test("engine: competing checkouts cannot oversell; replay does not deduct stock 
   assert.equal((await orders.transition({ orderId: winner, expectedCustomerEmail: email, status: "cancelled" })).changed, true);
   assert.equal((await orders.transition({ orderId: winner, expectedCustomerEmail: email, status: "cancelled" })).changed, false);
   assert.equal((await read(`PRODUCT#${id}`)).stock, 4);
+});
+
+test("engine: product/counter and outbox commit together; a rejected owner cannot leave a ghost event", async () => {
+  const id = await seedProduct();
+  let direct = 0;
+  const publisher = { async publish() { direct++; } };
+  const repository = new DynamoProductWriteRepository();
+  await new UpdateProduct(repository, publisher).execute({ productId: id, actor, changes: { stock: 5 }, expectedVersion: 1 });
+  const eventId = `inventory.stock.alert:${id}:2`;
+  const outbox = await read(`INVENTORY_ALERT_OUTBOX#${eventId}`);
+  assert.equal(outbox.event.eventId, eventId); assert.equal(outbox.event.changedBy, actor.subject);
+  assert.equal(outbox.status, "PENDING"); assert.equal(outbox.auditExpiresAt, undefined);
+  assert.equal((await read(`PRODUCT#${id}`)).version, 2);
+  await assert.rejects(repository.update({ id, changes: { stock: 0 }, expectedVersion: 2, expectedOwnerId: "foreign", status: "out_of_stock",
+    inventoryAlert: { ...outbox.event, stock: 0, previousStock: 5, status: "out_of_stock", previousStatus: "low_stock" }, changedBy: actor.subject }), { code: "CONFLICT" });
+  assert.equal(await read(`INVENTORY_ALERT_OUTBOX#inventory.stock.alert:${id}:3`), null);
+  assert.equal((await read(`PRODUCT#${id}`)).stock, 5);
+  const other = await seedProduct();
+  await new IncrementProductField(new DynamoProductCounterRepository(), publisher).execute({ productId: other, actor, field: "stock", incrementBy: -15 });
+  assert.equal((await read(`INVENTORY_ALERT_OUTBOX#inventory.stock.alert:${other}:2`)).event.source, "admin.increment");
+  assert.equal(direct, 0);
+});
+
+async function dueEvent(store, eventId, now) {
+  for (let attempt = 0; attempt < 30; attempt++) {
+    const candidate = (await store.due(new Date(now).toISOString(), 100)).find(item => item.eventId === eventId);
+    if (candidate) return candidate;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  throw new Error("Outbox event did not reach the due index");
+}
+
+test("engine: competing relay claims have one owner; expired owners cannot complete or reschedule", async () => {
+  const id = await seedProduct();
+  await new UpdateProduct(new DynamoProductWriteRepository(), { async publish() {} }).execute({ productId: id, actor, changes: { stock: 0 }, expectedVersion: 1 });
+  const eventId = `inventory.stock.alert:${id}:2`, store = new DynamoInventoryAlertOutbox(rawDb, table);
+  const now = Date.now() + 10000, iso = value => new Date(value).toISOString();
+  const candidate = await dueEvent(store, eventId, now);
+  const claims = await Promise.all(["one", "two"].map(owner => store.claim(candidate, owner, iso(now), iso(now + 120000))));
+  assert.equal(claims.filter(Boolean).length, 1);
+  const first = claims.find(Boolean);
+  assert.equal(await store.published(first, iso(now + 120001)), false);
+  const second = await store.claim({ eventId, attempts: 1 }, "new-owner", iso(now + 120001), iso(now + 240001));
+  assert.ok(second);
+  assert.equal(await store.retry(first, iso(now + 120002), iso(now + 180000), false), false);
+  assert.equal(await store.published(first, iso(now + 120002)), false);
+  assert.equal(await store.published(second, iso(now + 120002)), true);
+  const row = await read(`INVENTORY_ALERT_OUTBOX#${eventId}`);
+  assert.equal(row.status, "PUBLISHED"); assert.ok(row.auditExpiresAt); assert.equal(row.leaseOwner, undefined);
+  assert.equal(await store.requeueFailed(eventId, iso(now + 120003)), false);
+});
+
+test("engine: invalid event is quarantined; explicit recovery preserves identity and rejects active events", async () => {
+  const id = await seedProduct();
+  await new UpdateProduct(new DynamoProductWriteRepository(), { async publish() {} }).execute({ productId: id, actor, changes: { stock: 0 }, expectedVersion: 1 });
+  const eventId = `inventory.stock.alert:${id}:2`, store = new DynamoInventoryAlertOutbox(rawDb, table);
+  const now = Date.now() + 10000, iso = new Date(now).toISOString();
+  const candidate = await dueEvent(store, eventId, now);
+  const row = await read(`INVENTORY_ALERT_OUTBOX#${eventId}`);
+  row.event.stock = -1;
+  await rawDb.send(new PutItemCommand({ TableName: table, Item: marshall(row) }));
+  await assert.rejects(store.claim(candidate, "invalid-owner", iso, new Date(now + 120000).toISOString()), /quarantined/);
+  const quarantined = await read(row.PK);
+  assert.equal(quarantined.status, "FAILED"); assert.equal(quarantined.leaseOwner, undefined);
+  // Repair only the deliberately corrupted test payload, as an operator would after review.
+  quarantined.event.stock = 0;
+  await rawDb.send(new PutItemCommand({ TableName: table, Item: marshall(quarantined) }));
+  assert.equal(await store.requeueFailed(eventId, iso), true);
+  assert.equal(await store.requeueFailed(eventId, iso), false);
+  const recovered = await store.claim({ eventId, attempts: 0 }, "recovery-owner", iso, new Date(now + 120000).toISOString());
+  assert.equal(recovered.event.eventId, eventId); assert.equal(recovered.attempts, 1);
+  assert.equal(await store.requeueFailed(eventId, iso), false);
+  assert.equal(await store.published(recovered, iso), true);
+});
+
+test("engine: notification/receipt are atomic under concurrent delivery and receipt survives notification deletion", async () => {
+  const store = new DynamoInventoryNotifications(), eventId = `inventory.stock.alert:${randomUUID()}:2`;
+  const input = { eventId, email, title: "Low stock", message: "Stock=5", metadata: { eventId, audience: "admin" } };
+  const claims = await Promise.all(Array.from({ length: 5 }, () => store.createOnce(input)));
+  assert.equal(claims.filter(item => item.created).length, 1);
+  const winner = claims.find(item => item.created);
+  assert.ok(await read(`NOTIFICATION#${winner.notificationId}`));
+  await store.finish({ ...winner, eventId, email, effects: { notification: "SUCCEEDED", audit: "SUCCEEDED", sns: "UNKNOWN" } });
+  await rawDb.send(new DeleteItemCommand({ TableName: table, Key: marshall({ PK: `NOTIFICATION#${winner.notificationId}`, SK: "DETAIL" }) }));
+  assert.equal((await store.createOnce(input)).created, false);
+  assert.equal(await read(`NOTIFICATION#${winner.notificationId}`), null);
+});
+
+test("engine: publish-success/marker-failure repeats the same event without duplicate notification or external calls", async () => {
+  const id = await seedProduct();
+  await new UpdateProduct(new DynamoProductWriteRepository(), { async publish() {} }).execute({ productId: id, actor, changes: { stock: 5 }, expectedVersion: 1 });
+  const eventId = `inventory.stock.alert:${id}:2`, store = new DynamoInventoryAlertOutbox(rawDb, table);
+  let clock = Date.now() + 10000, sends = 0, external = 0, failMarker = true;
+  const findDue = store.due.bind(store), mark = store.published.bind(store);
+  await dueEvent(store, eventId, clock);
+  store.due = async (now, limit) => (await findDue(now, limit)).filter(item => item.eventId === eventId);
+  store.published = async (...args) => { if (failMarker) { failMarker = false; throw new Error("marker lost"); } return mark(...args); };
+  const effects = { inventory: new DynamoInventoryNotifications(), store: {},
+    async publish() { external++; return { eventId: "bus-event", eventBusName: "bus" }; },
+    async adminAlert() { external++; return { messageId: "sns", topicArn: "topic" }; } };
+  const consumer = new NotificationUseCases(null, null, effects, { adminEmail: email, platformEventsEnabled: true, adminAlertsEnabled: true }, { log() {}, warn() {}, error() {} });
+  const relay = new RelayInventoryAlerts(store, { async publish(event) { sends++; await consumer.processEvent({ ...event, type: "inventory.stock.alert" }); } }, randomUUID, () => clock);
+  assert.equal((await relay.execute()).retry, 1);
+  clock += 120000;
+  await dueEvent(store, eventId, clock);
+  assert.equal((await relay.execute()).published, 1);
+  assert.equal(sends, 2); assert.equal(external, 3);
+  assert.equal((await read(`INVENTORY_ALERT_OUTBOX#${eventId}`)).status, "PUBLISHED");
+});
+
+test("engine HTTP: the composition flag writes an outbox event and retains the legacy response shape", async () => {
+  const { createNestApp } = await import("../dist/src/core/app/create-app.js");
+  const { env } = await import("../dist/src/config/env.js");
+  const previous = { flag: env.INVENTORY_ALERT_OUTBOX_ENABLED, auth: env.AUTH_ALLOW_UNVERIFIED_JWT };
+  env.INVENTORY_ALERT_OUTBOX_ENABLED = true; env.AUTH_ALLOW_UNVERIFIED_JWT = true;
+  const app = await createNestApp();
+  try {
+    const id = await seedProduct();
+    const token = Buffer.from(JSON.stringify({ sub: actor.subject, email, role: "admin" })).toString("base64url");
+    const response = await app.getHttpAdapter().getInstance().inject({ method: "PATCH", url: `/api/shopping-items/${id}`,
+      headers: { authorization: `Bearer header.${token}.signature` }, payload: { stock: 5, version: 1 } });
+    assert.equal(response.statusCode, 200, response.body);
+    assert.equal(response.json().stock, 5); assert.equal(response.json().version, 2);
+    assert.equal((await read(`INVENTORY_ALERT_OUTBOX#inventory.stock.alert:${id}:2`)).event.stock, 5);
+  } finally { await app.close(); env.INVENTORY_ALERT_OUTBOX_ENABLED = previous.flag; env.AUTH_ALLOW_UNVERIFIED_JWT = previous.auth; }
 });
 
 test("engine: legacy completion commits status/audit together and never creates audit for a rejected transition", async () => {

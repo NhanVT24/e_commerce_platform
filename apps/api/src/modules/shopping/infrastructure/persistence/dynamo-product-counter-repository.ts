@@ -1,3 +1,5 @@
+import { inventoryOutboxWrite } from "./inventory-alert-outbox.js";
+import type { InventoryStockAlert } from "../../application/ports/inventory-alert-publisher.js";
 import type { ProductStatus, ProductCounters } from "../../domain/product.js";
 import type { ProductCounterRepository } from "../../application/ports/product-counter-repository.js";
 import { TransactWriteItemsCommand } from "@aws-sdk/client-dynamodb";
@@ -10,7 +12,7 @@ import { toProductRecord, toProduct } from "./product.mapper.js";
 import { readProductRecord, toDynamoItem, rethrowProductConflict, missingProductConflict } from "./product-record.store.js";
 const TableName = env.DYNAMODB_TABLE_NAME;
 
-export async function incrementProductRecord(id: string, field: string, incrementBy = 1, expectedOwnerSub?: string, prepared?: { expectedVersion: number; nextValue: number; status: ProductStatus }) {
+export async function incrementProductRecord(id: string, field: string, incrementBy = 1, expectedOwnerSub?: string, prepared?: { expectedVersion: number; nextValue: number; status: ProductStatus; inventoryAlert?: InventoryStockAlert; changedBy?: string }) {
   if (field !== "stock" && field !== "soldCount") {
     throw new Error(`Field "${field}" is not allowed for increment.`);
   }
@@ -91,7 +93,8 @@ export async function incrementProductRecord(id: string, field: string, incremen
           TableName,
           Item: toDynamoItem(toProductCategoryIndexRecord({ ...keys.product(id), ...mergedRecord }))
         }
-      }
+      },
+      ...inventoryOutboxWrite(prepared?.inventoryAlert, mergedRecord.version!, prepared?.changedBy ?? "", TableName, id)
     ]
   }));
 

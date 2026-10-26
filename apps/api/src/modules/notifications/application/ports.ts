@@ -1,3 +1,4 @@
+import type { InventoryNotifications } from "./ports/inventory-notifications.js";
 export interface NotificationRecord {
     id: string;
     customerEmail: string;
@@ -34,6 +35,7 @@ export interface NotificationConfig {
     adminEmail?: string;
 }
 export interface NotificationEffects {
+    inventory?: InventoryNotifications;
     store: {
         createNotification(input: {
             email: string;
