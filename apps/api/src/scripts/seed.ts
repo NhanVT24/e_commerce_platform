@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { PutItemCommand } from "@aws-sdk/client-dynamodb";
 import { marshall } from "@aws-sdk/util-dynamodb";
-import { env } from "../config/env.js";
+import { databaseConfig } from "../config/database-config.js";
 import { rawDb } from "../database/dynamodb/client.js";
 import { createShoppingItem, listAllShoppingItems } from "../modules/shopping/shopping.repository.js";
 
@@ -50,7 +50,7 @@ type ProductSeedRecord = {
   updatedAt: string;
 };
 
-const TableName = env.DYNAMODB_TABLE_NAME;
+const TableName = databaseConfig.DYNAMODB_TABLE_NAME;
 
 function toDynamoItem(item: Record<string, unknown>) {
   return marshall(item, { removeUndefinedValues: true });

@@ -1,9 +1,9 @@
 import { ScanCommand, UpdateItemCommand, type AttributeValue } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
-import { env } from "../config/env.js";
+import { databaseConfig } from "../config/database-config.js";
 import { rawDb } from "../database/dynamodb/client.js";
 
-const tableName = env.DYNAMODB_TABLE_NAME;
+const tableName = databaseConfig.DYNAMODB_TABLE_NAME;
 let cursor: Record<string, AttributeValue> | undefined;
 let removedCount = 0;
 

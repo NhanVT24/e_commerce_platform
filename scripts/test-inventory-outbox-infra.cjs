@@ -46,12 +46,20 @@ try {
     baselineModule.filename = stackPath; baselineModule.paths = Module._nodeModulePaths(path.dirname(stackPath));
     baselineModule._compile(ts.transpileModule(previous, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText, stackPath);
     const baseline = synth(baselineModule.exports.AwsApiStack, "baseline");
+    let removedUnusedPolicies = 0;
     for (const [id, resource] of Object.entries(baseline.Resources)) {
+      // These pure metadata/logging functions intentionally no longer have
+      // application integration permissions after the capability refactor.
+      if (!current.Resources[id] && resource.Type === "AWS::IAM::Policy" &&
+          /^(SupermarketImageWorkflowStepFunction|SupermarketAuditEventWorkerFunction)ServiceRoleDefaultPolicy/.test(id)) {
+        removedUnusedPolicies++;
+        continue;
+      }
       assert.ok(current.Resources[id], `Existing resource ID removed: ${id}`);
       if (resource.Type === "AWS::DynamoDB::Table") assert.deepEqual(current.Resources[id], resource, "Existing table/index definition changed");
       if (resource.Type === "AWS::Lambda::Function") assert.equal(current.Resources[id].Properties.Handler, resource.Properties.Handler);
     }
-    console.log(`Baseline ${process.argv[2]}: all ${Object.keys(baseline.Resources).length} existing resource IDs retained; table/index definitions unchanged.`);
+    console.log(`Baseline ${process.argv[2]}: ${Object.keys(baseline.Resources).length - removedUnusedPolicies} existing resource IDs retained; ${removedUnusedPolicies} unused IAM policies removed; table/index definitions unchanged.`);
   }
   console.log("Inventory outbox synth: handler, schedule, flag, alarm and least-privilege checks PASS. No AWS deployment.");
 } finally {

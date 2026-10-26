@@ -1,6 +1,6 @@
 import { GetAccountCommand, GetEmailIdentityCommand, SendBulkEmailCommand, SendEmailCommand } from "@aws-sdk/client-sesv2";
 import crypto from "node:crypto";
-import { env } from "../../config/env.js";
+import { emailConfig } from "../../config/email-config.js";
 import {
   createPendingEmailDeliveryBatch,
   markBulkEmailSendOutcome,
@@ -103,7 +103,7 @@ function content(input: Pick<SharedEmailInput | BulkSaleEmailInput, "subject" | 
  * headers. Optional recipients blocked by the SES sandbox are excluded first.
  */
 export async function sendSharedEmail(input: SharedEmailInput) {
-  if (!env.SES_INVENTORY_REPORT_CONFIGURATION_SET_NAME) throw new Error("Missing SES feedback configuration set.");
+  if (!emailConfig.SES_INVENTORY_REPORT_CONFIGURATION_SET_NAME) throw new Error("Missing SES feedback configuration set.");
   const recipients = normalizeRecipients([
     { email: input.to, type: "to" },
     ...(input.cc ?? []).map((email) => ({ email, type: "cc" as const })),
@@ -161,7 +161,7 @@ export async function sendSharedEmail(input: SharedEmailInput) {
         ...(deliverable.some((value) => value.recipient.type === "cc") ? { CcAddresses: deliverable.filter((value) => value.recipient.type === "cc").map((value) => value.recipient.email) } : {}),
         ...(deliverable.some((value) => value.recipient.type === "bcc") ? { BccAddresses: deliverable.filter((value) => value.recipient.type === "bcc").map((value) => value.recipient.email) } : {})
       },
-      ConfigurationSetName: env.SES_INVENTORY_REPORT_CONFIGURATION_SET_NAME,
+      ConfigurationSetName: emailConfig.SES_INVENTORY_REPORT_CONFIGURATION_SET_NAME,
       EmailTags: sesTrackingTags({ emailId: meta.id, emailType: input.emailType }),
       Content: { Simple: { Subject: { Data: input.subject, Charset: "UTF-8" }, Body: { Html: { Data: input.html, Charset: "UTF-8" }, ...(input.text ? { Text: { Data: input.text, Charset: "UTF-8" } } : {}) } } }
     }));
@@ -188,7 +188,7 @@ export async function sendSharedEmail(input: SharedEmailInput) {
  * therefore one bad address does not erase successful recipients in the batch.
  */
 export async function sendBulkSaleEmail(input: BulkSaleEmailInput) {
-  if (!env.SES_INVENTORY_REPORT_CONFIGURATION_SET_NAME) throw new Error("Missing SES feedback configuration set.");
+  if (!emailConfig.SES_INVENTORY_REPORT_CONFIGURATION_SET_NAME) throw new Error("Missing SES feedback configuration set.");
   const recipientEmails = input.recipients.map(normalizeEmail);
   if (!recipientEmails.length || recipientEmails.some((email) => !emailShape.test(email))) throw new Error("At least one valid recipient email is required.");
   if (new Set(recipientEmails).size !== recipientEmails.length) throw new Error("A bulk recipient may appear only once.");
@@ -214,7 +214,7 @@ export async function sendBulkSaleEmail(input: BulkSaleEmailInput) {
  * claim before calling SES.
  */
 export async function sendBulkSaleEmailBatch(input: BulkSaleEmailBatchInput): Promise<BulkSaleEmailBatchResult> {
-  if (!env.SES_INVENTORY_REPORT_CONFIGURATION_SET_NAME) throw new Error("Missing SES feedback configuration set.");
+  if (!emailConfig.SES_INVENTORY_REPORT_CONFIGURATION_SET_NAME) throw new Error("Missing SES feedback configuration set.");
   const recipientEmails = input.recipients.map(normalizeEmail);
   if (!recipientEmails.length || recipientEmails.length > maxRecipientsPerSend || recipientEmails.some((email) => !emailShape.test(email))) {
     throw new Error("An email job must contain from 1 to 50 valid recipient addresses.");
@@ -241,7 +241,7 @@ export async function sendBulkSaleEmailBatch(input: BulkSaleEmailBatchInput): Pr
       const result = await sesClient.send(new SendBulkEmailCommand({
         FromEmailAddress: input.senderEmail,
         ReplyToAddresses: replyToAddresses(),
-        ConfigurationSetName: env.SES_INVENTORY_REPORT_CONFIGURATION_SET_NAME,
+        ConfigurationSetName: emailConfig.SES_INVENTORY_REPORT_CONFIGURATION_SET_NAME,
         DefaultContent: content(input),
         BulkEmailEntries: recipients.map((recipient) => ({
           Destination: { ToAddresses: [recipient.recipientEmail] },

@@ -1,11 +1,11 @@
 import { PutItemCommand, ScanCommand, type AttributeValue } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
-import { env } from "../config/env.js";
+import { databaseConfig } from "../config/database-config.js";
 import { rawDb } from "../database/dynamodb/client.js";
 import { keys } from "../database/dynamodb/keys.js";
 import { toProductCategoryIndexRecord } from "../modules/shopping/indexes/product-category.index.js";
 
-const TableName = env.DYNAMODB_TABLE_NAME;
+const TableName = databaseConfig.DYNAMODB_TABLE_NAME;
 
 function isProductRecord(item: Record<string, any>) {
   return item.entityType === "PRODUCT" || (

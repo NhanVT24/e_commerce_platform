@@ -296,7 +296,7 @@ test("compiled manual-review API enforces admin role and resolution records evid
   const { ConfirmOrderPayment: CompiledConfirm } = await import("../dist/src/modules/storefront/application/confirm-order-payment/confirm-order-payment.js");
   const { AppExceptionFilter } = await import("../dist/src/common/filters/app-exception.filter.js");
   const { rawDb: compiledDb } = await import("../dist/src/database/dynamodb/client.js");
-  const { env } = await import("../dist/src/config/env.js"); const previous = env.AUTH_ALLOW_UNVERIFIED_JWT;
+  const { identityConfig: env } = await import("../dist/src/config/identity-config.js"); const previous = env.AUTH_ALLOW_UNVERIFIED_JWT;
   env.AUTH_ALLOW_UNVERIFIED_JWT = true;
   const db = transport(compiledDb), app = await NestFactory.create(PaymentRecoveryModule, new FastifyAdapter(), { logger: false });
   app.useGlobalFilters(new AppExceptionFilter());

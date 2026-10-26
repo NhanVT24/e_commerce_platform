@@ -6,12 +6,12 @@ import {
   type WriteRequest
 } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
-import { env } from "../../config/env.js";
+import { databaseConfig } from "../../config/database-config.js";
 import { auditTarget } from "../audit-log/audit-resources.js";
 import { deleteAuditedItem } from "../audit-log/audit-delete.js";
 import { rawDb } from "../../database/dynamodb/client.js";
 
-const TableName = env.DYNAMODB_TABLE_NAME;
+const TableName = databaseConfig.DYNAMODB_TABLE_NAME;
 const CLEANUP_LOCK_MINUTES = 30;
 const MAX_RECORDS_PER_ENTITY_PER_RUN = 2_500;
 

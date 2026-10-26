@@ -2,14 +2,14 @@ import crypto from "node:crypto";
 import { Product, type ProductStatus } from "../../domain/product.js";
 import type { ProductCreator } from "../../application/ports/product-creator.js";
 import { TransactWriteItemsCommand } from "@aws-sdk/client-dynamodb";
-import { env } from "../../../../config/env.js";
+import { databaseConfig } from "../../../../config/database-config.js";
 import { rawDb } from "../../../../database/dynamodb/client.js";
 import { keys } from "../../../../database/dynamodb/keys.js";
 import type { ProductRecord } from "../../product.types.js";
 import { toProductCategoryIndexRecord } from "../../indexes/product-category.index.js";
 import { normalizeText, toProductRecord } from "./product.mapper.js";
 import { toDynamoItem, rethrowProductConflict } from "./product-record.store.js";
-const TableName = env.DYNAMODB_TABLE_NAME;
+const TableName = databaseConfig.DYNAMODB_TABLE_NAME;
 
 export async function createProductRecord(input: ProductRecord, ownerSub: string, identity?: { id: string; createdAt: string; updatedAt: string; status: ProductStatus }) {
   const now = new Date().toISOString();

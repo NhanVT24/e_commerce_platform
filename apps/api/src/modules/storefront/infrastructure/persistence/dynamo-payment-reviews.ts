@@ -1,11 +1,11 @@
 import { GetItemCommand, PutItemCommand, QueryCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { rawDb } from "../../../../database/dynamodb/client.js";
-import { env } from "../../../../config/env.js";
+import { databaseConfig } from "../../../../config/database-config.js";
 import type { PaymentReview, PaymentReviewWriter } from "../../application/ports/payment-review.js";
 import { OrderActionError } from "../../application/order-action.error.js";
 
-const TableName = env.DYNAMODB_TABLE_NAME;
+const TableName = databaseConfig.DYNAMODB_TABLE_NAME;
 const encode = (row: Record<string, unknown>) => marshall(row, { removeUndefinedValues: true });
 const key = (txnRef: string) => encode({ PK: `PAYMENT_REVIEW#${txnRef}`, SK: "DETAIL" });
 const conditional = (error: unknown) => (error as { name?: string })?.name === "ConditionalCheckFailedException";

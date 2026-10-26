@@ -1,5 +1,5 @@
 import { PutEventsCommand } from "@aws-sdk/client-eventbridge";
-import { env } from "../../config/env.js";
+import { eventbridgeConfig } from "../../config/eventbridge-config.js";
 import { eventBridgeClient } from "./client.js";
 
 type PublishEventInput = {
@@ -10,7 +10,7 @@ type PublishEventInput = {
 };
 
 export async function publishEventBridgeEvent(input: PublishEventInput) {
-  const eventBusName = input.busName?.trim() || env.EVENTBRIDGE_DEFAULT_BUS_NAME?.trim();
+  const eventBusName = input.busName?.trim() || eventbridgeConfig.EVENTBRIDGE_DEFAULT_BUS_NAME?.trim();
   if (!eventBusName) {
     throw new Error(`Missing EventBridge bus for detailType=${input.detailType}`);
   }

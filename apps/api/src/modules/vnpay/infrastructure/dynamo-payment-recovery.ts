@@ -1,11 +1,11 @@
 import { GetItemCommand, QueryCommand, UpdateItemCommand, type AttributeValue } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { rawDb } from "../../../database/dynamodb/client.js";
-import { env } from "../../../config/env.js";
+import { databaseConfig } from "../../../config/database-config.js";
 import { getPaymentSessionByTxnRef } from "../vnpay.repository.js";
 import type { PaymentRecoveryQueue, PaymentRecoverySessions, RecoveryLane } from "../application/ports/payment-recovery-ports.js";
 
-const TableName = env.DYNAMODB_TABLE_NAME;
+const TableName = databaseConfig.DYNAMODB_TABLE_NAME;
 const encode = (row: Record<string, unknown>) => marshall(row, { removeUndefinedValues: true });
 const cursorKey = (lane: RecoveryLane) => encode({ PK: `RECOVERY_CURSOR#payment#${lane}`, SK: "DETAIL" });
 

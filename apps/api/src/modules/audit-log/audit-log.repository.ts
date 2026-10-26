@@ -2,7 +2,7 @@ import { BadRequestException, NotFoundException } from "@nestjs/common";
 import { BatchGetItemCommand, GetItemCommand, QueryCommand, type KeysAndAttributes } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { z } from "zod";
-import { env } from "../../config/env.js";
+import { databaseConfig } from "../../config/database-config.js";
 import { rawDb } from "../../database/dynamodb/client.js";
 import { auditResourceTypes } from "./audit-resources.js";
 import type { AuditLogRecord } from "./audit-log.js";
@@ -19,7 +19,7 @@ export async function getAuditLog(input: { pk?: unknown; sk?: unknown }) {
   }).safeParse(input);
   if (!key.success) throw new BadRequestException("Invalid audit event key.");
   const result = await rawDb.send(new GetItemCommand({
-    TableName: env.AUDIT_LOG_TABLE_NAME ?? defaultAuditLogTableName,
+    TableName: databaseConfig.AUDIT_LOG_TABLE_NAME ?? defaultAuditLogTableName,
     Key: marshall({ PK: key.data.pk, SK: key.data.sk }),
     ConsistentRead: true
   }));
@@ -40,7 +40,7 @@ function normalizeResourceType(value: unknown): AuditResourceTypeFilter {
 
 async function queryByResourceType(resourceType: AuditLogRecord["resourceType"], limit: number, cursor?: PageKey) {
   const result = await rawDb.send(new QueryCommand({
-    TableName: env.AUDIT_LOG_TABLE_NAME ?? defaultAuditLogTableName,
+    TableName: databaseConfig.AUDIT_LOG_TABLE_NAME ?? defaultAuditLogTableName,
     IndexName: "ResourceTimelineIndex",
     KeyConditionExpression: "#resourceType = :resourceType",
     ExpressionAttributeNames: {
@@ -97,7 +97,7 @@ export async function listAuditLogs(input: { resourceType?: unknown; limit?: unk
 
 export async function getAuditOrderEmails(orderIds: string[]) {
   const emails = new Map<string, string>();
-  const table = env.DYNAMODB_TABLE_NAME;
+  const table = databaseConfig.DYNAMODB_TABLE_NAME;
   for (let offset = 0; offset < orderIds.length; offset += 100) {
     let pending: Record<string, KeysAndAttributes> = {
       [table]: {

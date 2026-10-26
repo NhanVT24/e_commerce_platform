@@ -6,7 +6,7 @@ import { PutItemCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
 import { marshall } from "@aws-sdk/util-dynamodb";
 import { getRequestPrincipal } from "../../common/auth/request-principal.js";
 import { rawDb } from "../../database/dynamodb/client.js";
-import { env } from "../../config/env.js";
+import { databaseConfig } from "../../config/database-config.js";
 import { auditContext, principalAuditContext, serviceAuditContext } from "./audit-context.js";
 
 @Injectable()
@@ -34,7 +34,7 @@ export class AuditMutationInterceptor implements NestInterceptor {
         // replay, Scheduler/email calls). It stores no request/response payload.
         const operation = { PK: `OPERATION#${requestId}`, SK: "DETAIL" };
         try {
-          if (needsOperation) await rawDb.send(new PutItemCommand({ TableName: env.DYNAMODB_TABLE_NAME,
+          if (needsOperation) await rawDb.send(new PutItemCommand({ TableName: databaseConfig.DYNAMODB_TABLE_NAME,
             Item: marshall({ ...operation, entityType: "OPERATION", status: "started", auditExpiresAt: Math.floor(Date.now() / 1000) + 90 * 86400, method: request.method, route,
               targetId: ["id", "emailId", "emailJobId", "archive"].map((field) => (request.params as Record<string, unknown>)?.[field]).find((value) => typeof value === "string") ?? "",
               ...metadata }), ConditionExpression: "attribute_not_exists(PK)" }));
@@ -52,7 +52,7 @@ export class AuditMutationInterceptor implements NestInterceptor {
         } catch (error) { subscriber.error(error); }
         async function finish(status: "completed" | "failed") {
           if (!needsOperation) return;
-          await rawDb.send(new UpdateItemCommand({ TableName: env.DYNAMODB_TABLE_NAME, Key: marshall(operation),
+          await rawDb.send(new UpdateItemCommand({ TableName: databaseConfig.DYNAMODB_TABLE_NAME, Key: marshall(operation),
             UpdateExpression: "SET #status = :status", ConditionExpression: "attribute_exists(PK)",
             ExpressionAttributeNames: { "#status": "status" }, ExpressionAttributeValues: { ":status": { S: status } } }));
         }

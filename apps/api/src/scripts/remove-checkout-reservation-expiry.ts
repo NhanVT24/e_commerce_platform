@@ -1,8 +1,8 @@
 import { ScanCommand, UpdateItemCommand, type AttributeValue } from "@aws-sdk/client-dynamodb";
-import { env } from "../config/env.js";
+import { databaseConfig } from "../config/database-config.js";
 import { rawDb } from "../database/dynamodb/client.js";
 
-const TableName = env.DYNAMODB_TABLE_NAME;
+const TableName = databaseConfig.DYNAMODB_TABLE_NAME;
 const applyChanges = process.argv.includes("--apply");
 let lastKey: Record<string, AttributeValue> | undefined;
 let matched = 0;

@@ -1,7 +1,7 @@
 import { DynamoPaymentRecovery } from "../../../vnpay/infrastructure/dynamo-payment-recovery.js";
 import { UpdateItemCommand, TransactWriteItemsCommand } from "@aws-sdk/client-dynamodb";
 import { marshall } from "@aws-sdk/util-dynamodb";
-import { env } from "../../../../config/env.js";
+import { databaseConfig } from "../../../../config/database-config.js";
 import { rawDb } from "../../../../database/dynamodb/client.js";
 import { inventoryTransaction } from "../../../shopping/infrastructure/persistence/inventory-transaction.js";
 import { readProductRecord } from "../../../shopping/infrastructure/persistence/product-record.store.js";
@@ -11,7 +11,7 @@ import { REFUND_WINDOW_MS, isTerminalRefund } from "../../domain/order-refund.js
 import { OrderActionError } from "../../application/order-action.error.js";
 import type { RefundOrderRepository } from "../../application/ports/order-lifecycle-ports.js";
 import { getAwaitingPaymentOrder, listOrderItems } from "./order-record.store.js";
-const TableName = env.DYNAMODB_TABLE_NAME;
+const TableName = databaseConfig.DYNAMODB_TABLE_NAME;
 const toDynamoItem = (item: Record<string, unknown>) => marshall(item, { removeUndefinedValues: true });
 const buildOrderMetaKey = (orderId: string) => ({ PK: 'ORDER#' + orderId, SK: 'ORDER' });
 

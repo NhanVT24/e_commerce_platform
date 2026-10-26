@@ -1,13 +1,13 @@
-import { env } from "../../config/env.js";
+import { emailConfig } from "../../config/email-config.js";
 
 export function authSenderEmail() {
-  return env.SES_AUTH_FROM_EMAIL ?? env.SES_FROM_EMAIL;
+  return emailConfig.SES_AUTH_FROM_EMAIL ?? emailConfig.SES_FROM_EMAIL;
 }
 
 export function ordersSenderEmail() {
-  return env.SES_ORDERS_FROM_EMAIL ?? env.SES_FROM_EMAIL;
+  return emailConfig.SES_ORDERS_FROM_EMAIL ?? emailConfig.SES_FROM_EMAIL;
 }
 
 export function replyToAddresses() {
-  return env.SES_REPLY_TO_EMAIL ? [env.SES_REPLY_TO_EMAIL] : undefined;
+  return emailConfig.SES_REPLY_TO_EMAIL ? [emailConfig.SES_REPLY_TO_EMAIL] : undefined;
 }

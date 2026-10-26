@@ -2,10 +2,10 @@ import crypto from "node:crypto";
 import { ConditionalCheckFailedException, GetItemCommand, QueryCommand, TransactWriteItemsCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { feedbackUpdate, type FeedbackStatus } from "./email-feedback.js";
-import { env } from "../../config/env.js";
+import { databaseConfig } from "../../config/database-config.js";
 import { rawDb } from "../../database/dynamodb/client.js";
 
-const TableName = env.DYNAMODB_TABLE_NAME;
+const TableName = databaseConfig.DYNAMODB_TABLE_NAME;
 
 export type EmailDeliveryStatus = "pending" | "accepted" | "delivered" | "bounced" | "complained" | "rejected" | "delivery_delayed" | "failed" | "not_sent" | "unknown";
 export type EmailType = "inventory_daily_report" | "order_confirmation" | "payment_failure" | "order_failure" | "refund_status" | "sale_campaign" | "account_welcome";
