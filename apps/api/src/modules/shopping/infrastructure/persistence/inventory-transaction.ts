@@ -1,5 +1,5 @@
 import type { TransactWriteItem } from "@aws-sdk/client-dynamodb";
-import { env } from "../../../../config/env.js";
+import { databaseConfig } from "../../../../config/database-config.js";
 import { keys } from "../../../../database/dynamodb/keys.js";
 import { toProduct } from "./product.mapper.js";
 import { buildProductCategoryIndexKey, toProductCategoryIndexRecord } from "../../indexes/product-category.index.js";
@@ -23,7 +23,7 @@ export function inventoryTransaction(product: ProductRecord, delta: { stock: num
   const next = { ...product, stock, soldCount: sold, version: version + 1,
     status: changed.stockStatus, updatedAt, ...(resetAlert ? { inventoryAlertSent: false } : {}) };
   if (resetAlert) delete next.inventoryAlertSentAt;
-  const table = env.DYNAMODB_TABLE_NAME;
+  const table = databaseConfig.DYNAMODB_TABLE_NAME;
   return [
     { Update: {
       TableName: table, Key: toDynamoItem(keys.product(String(product.id))),

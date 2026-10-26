@@ -9,13 +9,13 @@ export { getAwaitingPaymentOrder, listOrderItems } from "./order-record.store.js
 import crypto from "node:crypto";
 import { GetItemCommand, PutItemCommand, ScanCommand, TransactWriteItemsCommand, UpdateItemCommand, type AttributeValue } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
-import { env } from "../../../../config/env.js";
+import { databaseConfig } from "../../../../config/database-config.js";
 import { rawDb } from "../../../../database/dynamodb/client.js";
 import { listShoppingItems } from "../../../shopping/shopping.repository.js";
 import { resolveSalePrice } from "../../../sales/sale-pricing.js";
 import { listActiveSaleCampaigns } from "../../../sales/sales.repository.js";
 
-const TableName = env.DYNAMODB_TABLE_NAME;
+const TableName = databaseConfig.DYNAMODB_TABLE_NAME;
 
 type OrderLine = {
   productId: string;

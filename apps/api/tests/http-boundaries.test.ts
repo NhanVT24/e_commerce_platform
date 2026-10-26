@@ -2,7 +2,7 @@ import "reflect-metadata";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { getRequestPrincipal, requireRequestPrincipal } from "../src/common/auth/request-principal.js";
-import { env } from "../src/config/env.js";
+import { identityConfig as env } from "../src/config/identity-config.js";
 import { requestFailureContext } from "../src/common/logging/request-failure-context.js";
 
 function token(payload: Record<string, unknown>) {
@@ -56,7 +56,7 @@ test("compiled controllers validate both product aliases and preserve customer/p
   const { CreateProduct } = await import("../dist/src/modules/shopping/application/create-product/create-product.js");
   const { CreateCheckout } = await import("../dist/src/modules/storefront/application/create-checkout/create-checkout.js");
   const { ShoppingService } = await import("../dist/src/modules/shopping/shopping.service.js");
-  const { env: compiledEnv } = await import("../dist/src/config/env.js");
+  const { identityConfig: compiledEnv } = await import("../dist/src/config/identity-config.js");
   class TestModule {}
   Module({ imports: [StorefrontModule, ShoppingModule] })(TestModule);
   const previous = compiledEnv.AUTH_ALLOW_UNVERIFIED_JWT; compiledEnv.AUTH_ALLOW_UNVERIFIED_JWT = true;
@@ -114,7 +114,7 @@ test("full app preHandler, audit interceptor and controller preserve the same tr
   const { createNestApp } = await import("../dist/src/core/app/create-app.js");
   const { CreateProduct } = await import("../dist/src/modules/shopping/application/create-product/create-product.js");
   const { auditContext } = await import("../dist/src/modules/audit-log/audit-context.js");
-  const { env: compiledEnv } = await import("../dist/src/config/env.js");
+  const { identityConfig: compiledEnv } = await import("../dist/src/config/identity-config.js");
   const previous = compiledEnv.AUTH_ALLOW_UNVERIFIED_JWT; compiledEnv.AUTH_ALLOW_UNVERIFIED_JWT = true;
   const app = await createNestApp();
   let called = 0;
@@ -149,7 +149,7 @@ test("remaining compiled modules preserve profile identity, email admin guard an
     return {};
   }) as typeof rawDb.send;
   const { createNestApp } = await import("../dist/src/core/app/create-app.js");
-  const { env: compiledEnv } = await import("../dist/src/config/env.js");
+  const { identityConfig: compiledEnv } = await import("../dist/src/config/identity-config.js");
   const { ProfileQueries, UpdateProfile } = await import("../dist/src/modules/customers/authorization/application/profile.js");
   const { EmailAdministration } = await import("../dist/src/modules/email-deliveries/application/email-administration.js");
   const { UploadAccess } = await import("../dist/src/modules/uploads/application/upload-access.js");

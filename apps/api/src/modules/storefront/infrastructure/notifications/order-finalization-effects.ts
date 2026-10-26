@@ -1,5 +1,5 @@
 import { Logger } from "@nestjs/common";
-import { env } from "../../../../config/env.js";
+import { eventbridgeConfig } from "../../../../config/eventbridge-config.js";
 import { publishEventBridgeEvent } from "../../../../integrations/eventbridge/publisher.js";
 import { sendOrderFailureEmail } from "../../../../integrations/ses/order-mailer.js";
 import { ordersSenderEmail } from "../../../../integrations/ses/sender-config.js";
@@ -151,13 +151,13 @@ export class NotificationOrderFinalizationEffects implements OrderFinalizationEf
     detailType: "storefront.order.succeeded" | "storefront.order.failed";
     detail: Record<string, unknown>;
   }) {
-    if (!env.EVENTBRIDGE_COMMERCE_BUS_NAME) {
+    if (!eventbridgeConfig.EVENTBRIDGE_COMMERCE_BUS_NAME) {
       this.logger.warn(`[eventbridge-commerce] lifecycle_disabled detailType=${input.detailType}`);
       return;
     }
 
     const published = await publishEventBridgeEvent({
-      busName: env.EVENTBRIDGE_COMMERCE_BUS_NAME,
+      busName: eventbridgeConfig.EVENTBRIDGE_COMMERCE_BUS_NAME,
       source: "supermarket.commerce",
       detailType: input.detailType,
       detail: input.detail

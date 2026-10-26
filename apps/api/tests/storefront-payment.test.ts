@@ -252,7 +252,7 @@ test("compiled HTTP checkout -> signed return/IPN -> actual payment worker keeps
   const { RuntimeConfigService } = await import("../dist/src/config/runtime-config.service.js");
   const { AppExceptionFilter } = await import("../dist/src/common/filters/app-exception.filter.js");
   const { rawDb: compiledDb } = await import("../dist/src/database/dynamodb/client.js");
-  const { env } = await import("../dist/src/config/env.js");
+  const { identityConfig: env } = await import("../dist/src/config/identity-config.js");
   const db = transport(compiledDb), previous = env.AUTH_ALLOW_UNVERIFIED_JWT;
   env.AUTH_ALLOW_UNVERIFIED_JWT = true;
   const app = await NestFactory.create(StorefrontModule, new FastifyAdapter(), { logger: false });

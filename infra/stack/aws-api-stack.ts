@@ -40,6 +40,7 @@ import { createQueues, createSesFeedbackDlq } from "../module/sqs";
 import { createProductImagesAliases } from "../module/route53";
 import { createProductImagesBucket } from "../module/s3";
 import { createHttpApi } from "./http-api";
+import { createApplicationLambdaProfiles, type ApplicationLambdaProfile, type LambdaGrants } from "./application-lambda-profiles";
 
 export interface AwsApiStackProps extends StackProps {
   // API Gateway REGIONAL custom domain: api.truyenmasinhvien.com.
@@ -644,7 +645,7 @@ export class AwsApiStack extends Stack {
       inventoryReportEventsTopicPolicy.node.defaultChild as sns.CfnTopicPolicy
     );
 
-    const sharedEnvironment = {
+    const applicationEnvironment = {
       DYNAMODB_TABLE_NAME: table.tableName ?? dynamoTableName.valueAsString,
       AUDIT_LOG_TABLE_NAME: auditLogTable.tableName ?? "supermarket-audit-log",
       COGNITO_USER_POOL_ID: userPool.userPoolId,
@@ -652,7 +653,6 @@ export class AwsApiStack extends Stack {
       S3_BUCKET_NAME: productImagesBucket.bucketName,
       S3_PUBLIC_BASE_URL: productImagesPublicBaseUrl,
       SQS_NOTIFICATIONS_QUEUE_URL: notificationsQueue.queueUrl,
-      SQS_AUDIT_QUEUE_URL: auditQueue.queueUrl,
       SQS_PAYMENT_EVENTS_QUEUE_URL: paymentEventsQueue.queueUrl,
       SQS_EMAIL_JOBS_QUEUE_URL: emailJobsQueue.queueUrl,
       SQS_STOREFRONT_ORDERS_QUEUE_URL: storefrontOrdersQueue.queueUrl,
@@ -664,7 +664,6 @@ export class AwsApiStack extends Stack {
       SQS_IMAGE_UPLOADS_DLQ_URL: imageUploadsDlq.queueUrl,
       SQS_EVENTBRIDGE_TARGET_DLQ_URL: eventBridgeTargetDlq.queueUrl,
       SQS_EMAIL_EVENTBRIDGE_DELIVERY_DLQ_URL: emailEventBridgeDeliveryDlq.queueUrl,
-      EVENTBRIDGE_BUS_NAME: platformEventBus.eventBusName,
       EVENTBRIDGE_DEFAULT_BUS_NAME: platformEventBus.eventBusName,
       EVENTBRIDGE_COMMERCE_BUS_NAME: commerceEventBus.eventBusName,
       EVENTBRIDGE_PAYMENT_BUS_NAME: paymentEventBus.eventBusName,
@@ -674,10 +673,8 @@ export class AwsApiStack extends Stack {
       EVENTBRIDGE_PLATFORM_ARCHIVE_ARN: platformArchive.attrArn,
       INVENTORY_ALERT_OUTBOX_ENABLED: inventoryOutboxEnabled.valueAsString,
       EMAIL_EVENT_PUBLISH_MAX_ATTEMPTS: "5",
-      EMAIL_EVENT_PUBLISH_RETRY_BASE_SECONDS: "60",
-      EMAIL_EVENT_PUBLISH_RETRY_MAX_SECONDS: "900",
-      EMAIL_EVENT_PUBLISH_LEASE_SECONDS: "120",
-      CHECKOUT_TX_RACE_LOGGING: "false",
+      // Retry delays and lease duration use the defaults in apps/api/src/config/env.ts.
+      // Keep redundant configuration out of Lambda's 4 KiB environment budget.
       SNS_ADMIN_ALERTS_TOPIC_ARN: adminAlertsTopic.topicArn,
       SES_FROM_EMAIL: sesFromEmail.valueAsString,
       SES_AUTH_FROM_EMAIL: sesAuthFromEmail.valueAsString,
@@ -695,112 +692,130 @@ export class AwsApiStack extends Stack {
       VNPAY_IPN_URL: vnpayIpnUrl.valueAsString
     };
 
-    const attachSharedPolicies = (fn: lambda.Function) => {
-      fn.addToRolePolicy(new iam.PolicyStatement({
-        actions: [
-          "dynamodb:BatchGetItem",
-          "dynamodb:BatchWriteItem",
-          "dynamodb:ConditionCheckItem",
-          "dynamodb:DeleteItem",
-          "dynamodb:GetItem",
-          "dynamodb:PutItem",
-          "dynamodb:Query",
-          "dynamodb:Scan",
-          "dynamodb:UpdateItem",
-          "dynamodb:TransactWriteItems"
-        ],
-        resources: [
-          table.attrArn,
-          `${table.attrArn}/index/*`
-        ]
-      }));
-      fn.addToRolePolicy(new iam.PolicyStatement({
-        actions: [
-          "ses:SendEmail",
-          "ses:SendRawEmail",
-          "ses:SendBulkEmail",
-          "ses:SendBulkTemplatedEmail",
-          "ses:GetAccount",
-          "ses:GetEmailIdentity"
-        ],
-        resources: ["*"]
-      }));
-      fn.addToRolePolicy(new iam.PolicyStatement({
-        actions: [
-          "sqs:ReceiveMessage",
-          "sqs:DeleteMessage",
-          "sqs:DeleteMessageBatch",
-          "sqs:GetQueueAttributes",
-          "sqs:ChangeMessageVisibility",
-          "sqs:ChangeMessageVisibilityBatch"
-        ],
-        resources: [
-          notificationsDlq.queueArn,
-          storefrontOrdersDlq.queueArn,
-          paymentEventsDlq.queueArn,
-          emailJobsDlq.queueArn,
-          imageUploadsDlq.queueArn,
-          eventBridgeTargetDlq.queueArn,
-          emailEventBridgeDeliveryDlq.queueArn
-        ]
-      }));
-      fn.addToRolePolicy(new iam.PolicyStatement({
-        actions: ["events:PutEvents"],
-        resources: [
-          commerceEventBus.eventBusArn,
-          paymentEventBus.eventBusArn,
-          platformEventBus.eventBusArn
-        ]
-      }));
-      fn.addToRolePolicy(new iam.PolicyStatement({
-        actions: ["events:StartReplay", "events:DescribeReplay"],
-        resources: [
-          commerceArchive.attrArn,
-          paymentArchive.attrArn,
-          platformArchive.attrArn,
-          `arn:aws:events:${this.region}:${this.account}:replay/*`
-        ]
-      }));
-      fn.addToRolePolicy(new iam.PolicyStatement({
-        actions: ["sns:Publish"],
-        resources: [adminAlertsTopic.topicArn]
-      }));
-
-      fn.addToRolePolicy(new iam.PolicyStatement({
-        actions: [
-          "s3:GetObject",
-          "s3:PutObject",
-          "s3:DeleteObject"
-        ],
-        resources: [
-          productImagesBucket.arnForObjects("public/*"),
-          productImagesBucket.arnForObjects("private/*")
-        ]
-      }));
-      fn.addToRolePolicy(new iam.PolicyStatement({
-        actions: ["s3:ListBucket"],
-        resources: [productImagesBucket.bucketArn],
-        conditions: {
-          StringLike: {
-            "s3:prefix": [
-              "public/*",
-              "private/*"
-            ]
+    const profiles = createApplicationLambdaProfiles(applicationEnvironment);
+    const capabilityGrants: LambdaGrants = {
+      databaseRead: fn => {
+        fn.addToRolePolicy(new iam.PolicyStatement({
+          actions: ["dynamodb:GetItem", "dynamodb:BatchGetItem", "dynamodb:Query", "dynamodb:Scan"],
+          resources: [table.attrArn, `${table.attrArn}/index/*`]
+        }));
+      },
+      databaseWrite: fn => {
+        fn.addToRolePolicy(new iam.PolicyStatement({
+          actions: [
+            "dynamodb:BatchGetItem",
+            "dynamodb:BatchWriteItem",
+            "dynamodb:ConditionCheckItem",
+            "dynamodb:DeleteItem",
+            "dynamodb:GetItem",
+            "dynamodb:PutItem",
+            "dynamodb:Query",
+            "dynamodb:Scan",
+            "dynamodb:UpdateItem",
+            "dynamodb:TransactWriteItems"
+          ],
+          resources: [
+            table.attrArn,
+            `${table.attrArn}/index/*`
+          ]
+        }));
+      },
+      mail: fn => {
+        fn.addToRolePolicy(new iam.PolicyStatement({
+          actions: [
+            "ses:SendEmail",
+            "ses:SendRawEmail",
+            "ses:SendBulkEmail",
+            "ses:SendBulkTemplatedEmail",
+            "ses:GetAccount",
+            "ses:GetEmailIdentity"
+          ],
+          resources: ["*"]
+        }));
+      },
+      events: fn => {
+        fn.addToRolePolicy(new iam.PolicyStatement({
+          actions: ["events:PutEvents"],
+          resources: [
+            commerceEventBus.eventBusArn,
+            paymentEventBus.eventBusArn,
+            platformEventBus.eventBusArn
+          ]
+        }));
+      },
+      alerts: fn => {
+        fn.addToRolePolicy(new iam.PolicyStatement({
+          actions: ["sns:Publish"],
+          resources: [adminAlertsTopic.topicArn]
+        }));
+      },
+      storage: fn => {
+        fn.addToRolePolicy(new iam.PolicyStatement({
+          actions: [
+            "s3:GetObject",
+            "s3:PutObject",
+            "s3:DeleteObject"
+          ],
+          resources: [
+            productImagesBucket.arnForObjects("public/*"),
+            productImagesBucket.arnForObjects("private/*")
+          ]
+        }));
+        fn.addToRolePolicy(new iam.PolicyStatement({
+          actions: ["s3:ListBucket"],
+          resources: [productImagesBucket.bucketArn],
+          conditions: {
+            StringLike: {
+              "s3:prefix": [
+                "public/*",
+                "private/*"
+              ]
+            }
           }
-        }
-      }));
-      notificationsQueue.grantSendMessages(fn);
-      auditQueue.grantSendMessages(fn);
-      storefrontOrdersQueue.grantSendMessages(fn);
-      paymentEventsQueue.grantSendMessages(fn);
-      emailJobsQueue.grantSendMessages(fn);
-      imageUploadsQueue.grantSendMessages(fn);
+        }));
+      },
+      admin: fn => {
+        fn.addToRolePolicy(new iam.PolicyStatement({
+          actions: [
+            "sqs:ReceiveMessage",
+            "sqs:DeleteMessage",
+            "sqs:DeleteMessageBatch",
+            "sqs:GetQueueAttributes",
+            "sqs:ChangeMessageVisibility",
+            "sqs:ChangeMessageVisibilityBatch"
+          ],
+          resources: [
+            notificationsDlq.queueArn,
+            storefrontOrdersDlq.queueArn,
+            paymentEventsDlq.queueArn,
+            emailJobsDlq.queueArn,
+            imageUploadsDlq.queueArn,
+            eventBridgeTargetDlq.queueArn,
+            emailEventBridgeDeliveryDlq.queueArn
+          ]
+        }));
+        fn.addToRolePolicy(new iam.PolicyStatement({
+          actions: ["events:StartReplay", "events:DescribeReplay"],
+          resources: [
+            commerceArchive.attrArn,
+            paymentArchive.attrArn,
+            platformArchive.attrArn,
+            `arn:aws:events:${this.region}:${this.account}:replay/*`
+          ]
+        }));
+        notificationsQueue.grantSendMessages(fn);
+        storefrontOrdersQueue.grantSendMessages(fn);
+        paymentEventsQueue.grantSendMessages(fn);
+        emailJobsQueue.grantSendMessages(fn);
+        imageUploadsQueue.grantSendMessages(fn);
+      }
     };
 
     const createApplicationLambda = (
       id: string,
       functionName: string,
       handler: string,
+      profile: ApplicationLambdaProfile,
       timeoutSeconds = 10,
       memorySize = 256
     ) => {
@@ -812,13 +827,10 @@ export class AwsApiStack extends Stack {
         timeout: Duration.seconds(timeoutSeconds),
         memorySize,
         code: sharedLambdaCode,
-        environment: {
-          ...sharedEnvironment,
-          LAMBDA_FUNCTION_CONTEXT: functionName
-        }
+        environment: profile.environment
       });
 
-      attachSharedPolicies(fn);
+      for (const capability of profile.capabilities) capabilityGrants[capability](fn);
       return fn;
     };
 
@@ -826,6 +838,7 @@ export class AwsApiStack extends Stack {
       "SupermarketHttpApiFunction",
       "supermarket-http-api-aws",
       "src/entrypoints/lambda/http/admin.handler",
+      profiles.http,
       25,
       256
     );
@@ -889,6 +902,7 @@ export class AwsApiStack extends Stack {
       "SupermarketOrderWorkerFunction",
       "supermarket-order-worker-aws",
       "src/entrypoints/lambda/queue/order-worker.handler",
+      profiles.order,
       20,
       512
     );
@@ -896,6 +910,7 @@ export class AwsApiStack extends Stack {
       "SupermarketNotificationWorkerFunction",
       "supermarket-notification-worker-aws",
       "src/entrypoints/lambda/queue/notification-worker.handler",
+      profiles.notification,
       20,
       512
     );
@@ -903,6 +918,7 @@ export class AwsApiStack extends Stack {
       "SupermarketPaymentWorkerFunction",
       "supermarket-payment-worker-aws",
       "src/entrypoints/lambda/queue/payment-worker.handler",
+      profiles.notification,
       20,
       512
     );
@@ -910,6 +926,7 @@ export class AwsApiStack extends Stack {
       "SupermarketEmailWorkerFunction",
       "supermarket-email-worker-aws",
       "src/entrypoints/lambda/queue/email-worker.handler",
+      profiles.emailDelivery,
       60,
       1024
     );
@@ -931,6 +948,7 @@ export class AwsApiStack extends Stack {
       "SupermarketEmailRouteTrackerFunction",
       "supermarket-email-route-tracker-aws",
       "src/entrypoints/lambda/jobs/email-route-tracker.handler",
+      profiles.emailTracker,
       10,
       256
     );
@@ -938,6 +956,7 @@ export class AwsApiStack extends Stack {
       "SupermarketEmailRoutingWatchdogFunction",
       "supermarket-email-routing-watchdog-aws",
       "src/entrypoints/lambda/jobs/email-routing-watchdog.handler",
+      profiles.emailWatchdog,
       30,
       256
     );
@@ -946,6 +965,7 @@ export class AwsApiStack extends Stack {
       "SupermarketEmailPublishRecoveryFunction",
       "supermarket-email-publish-recovery-aws",
       "src/entrypoints/lambda/jobs/email-publish-recovery.handler",
+      profiles.emailRecovery,
       30,
       256
     );
@@ -1001,6 +1021,7 @@ export class AwsApiStack extends Stack {
       "SupermarketWeeklyAdminReportFunction",
       "supermarket-weekly-admin-report-aws",
       "src/entrypoints/lambda/jobs/weekly-admin-report.handler",
+      profiles.weeklyReport,
       30,
       512
     );
@@ -1008,6 +1029,7 @@ export class AwsApiStack extends Stack {
       "SupermarketDailyInventoryReportFunction",
       "supermarket-daily-inventory-report-aws",
       "src/entrypoints/lambda/jobs/daily-inventory-report.handler",
+      profiles.inventoryReport,
       30,
       512
     );
@@ -1015,6 +1037,7 @@ export class AwsApiStack extends Stack {
       "SupermarketSesInventoryEventFunction",
       "supermarket-ses-inventory-event-aws",
       "src/entrypoints/lambda/jobs/ses-inventory-event.handler",
+      profiles.emailFeedback,
       20,
       256
     );
@@ -1043,6 +1066,7 @@ export class AwsApiStack extends Stack {
       "SupermarketOrderWorkflowStepFunction",
       "supermarket-order-workflow-step-aws",
       "src/entrypoints/lambda/workflow/order-workflow-step.handler",
+      profiles.checkout,
       30,
       512
     );
@@ -1050,6 +1074,7 @@ export class AwsApiStack extends Stack {
       "SupermarketPaymentWorkflowStepFunction",
       "supermarket-payment-workflow-step-aws",
       "src/entrypoints/lambda/workflow/payment-workflow-step.handler",
+      profiles.readPayment,
       30,
       512
     );
@@ -1057,6 +1082,7 @@ export class AwsApiStack extends Stack {
       "SupermarketImageWorkflowStepFunction",
       "supermarket-image-workflow-step-aws",
       "src/entrypoints/lambda/workflow/image-workflow-step.handler",
+      profiles.image,
       20,
       256
     );
@@ -1064,6 +1090,7 @@ export class AwsApiStack extends Stack {
       "SupermarketBuildWeeklyReportFunction",
       "supermarket-build-weekly-report-aws",
       "src/entrypoints/lambda/workflow/build-weekly-report.handler",
+      profiles.buildReport,
       30,
       512
     );
@@ -1071,6 +1098,7 @@ export class AwsApiStack extends Stack {
       "SupermarketSendMailWorkflowStepFunction",
       "supermarket-send-mail-workflow-step-aws",
       "src/entrypoints/lambda/workflow/send-mail-workflow-step.handler",
+      profiles.sendReport,
       20,
       256
     );
@@ -1078,6 +1106,7 @@ export class AwsApiStack extends Stack {
       "SupermarketImageUploadWorkerFunction",
       "supermarket-image-upload-worker-aws",
       "src/entrypoints/lambda/queue/image-upload-worker.handler",
+      profiles.image,
       20,
       256
     );
@@ -1087,6 +1116,7 @@ export class AwsApiStack extends Stack {
       "SupermarketAuditEventWorkerFunction",
       "supermarket-audit-event-worker-aws",
       "src/entrypoints/lambda/jobs/audit-event-worker.handler",
+      profiles.auditEvent,
       15,
       256
     );
@@ -1094,6 +1124,7 @@ export class AwsApiStack extends Stack {
       "SupermarketReleaseExpiredOrdersFunction",
       "supermarket-release-expired-orders-aws",
       "src/entrypoints/lambda/jobs/release-expired-orders.handler",
+      profiles.expireOrders,
       20,
       256
     );
@@ -1101,6 +1132,7 @@ export class AwsApiStack extends Stack {
       "SupermarketReconcilePendingRefundsFunction",
       "supermarket-reconcile-pending-refunds-aws",
       "src/entrypoints/lambda/jobs/reconcile-pending-refunds.handler",
+      profiles.refundRecovery,
       60,
       512
     );
@@ -1108,6 +1140,7 @@ export class AwsApiStack extends Stack {
       "SupermarketReconcilePaymentEventsFunction",
       "supermarket-reconcile-payment-events-aws",
       "src/entrypoints/lambda/jobs/reconcile-payment-events.handler",
+      profiles.paymentRecovery,
       60,
       512
     );
@@ -1115,6 +1148,7 @@ export class AwsApiStack extends Stack {
       "SupermarketDataCleanupFunction",
       "supermarket-data-cleanup-aws",
       "src/entrypoints/lambda/jobs/data-cleanup.handler",
+      profiles.cleanup,
       120,
       512
     );
@@ -1122,6 +1156,7 @@ export class AwsApiStack extends Stack {
       "SupermarketSaleCampaignWorkerFunction",
       "supermarket-sale-campaign-worker-aws",
       "src/entrypoints/lambda/jobs/sale-campaign-worker.handler",
+      profiles.saleCampaign,
       20,
       256
     );

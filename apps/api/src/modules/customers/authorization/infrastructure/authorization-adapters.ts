@@ -1,15 +1,16 @@
 import { CognitoIdentityProviderClient, ListUsersCommand, type AttributeType } from "@aws-sdk/client-cognito-identity-provider";
-import { env } from "../../../../config/env.js";
+import { awsConfig } from "../../../../config/aws-config.js";
+import { identityConfig } from "../../../../config/identity-config.js";
 import * as store from "../authorization.repository.js";
 import type { UserDirectory, AuthorizationStore } from "../application/authorization.js";
-const cognito = new CognitoIdentityProviderClient({ region: env.AWS_REGION });
+const cognito = new CognitoIdentityProviderClient({ region: awsConfig.AWS_REGION });
 function attribute(attributes: AttributeType[] | undefined, name: string) { return attributes?.find(item => item.Name === name)?.Value?.trim() ?? ""; }
 export class CognitoUserDirectory implements UserDirectory {
     async listUsers() {
-        if (!env.COGNITO_USER_POOL_ID)
+        if (!identityConfig.COGNITO_USER_POOL_ID)
             throw new Error("Missing COGNITO_USER_POOL_ID configuration.");
         const response = await cognito.send(new ListUsersCommand({
-            UserPoolId: env.COGNITO_USER_POOL_ID,
+            UserPoolId: identityConfig.COGNITO_USER_POOL_ID,
             Limit: 60
         }));
         return (response.Users ?? [])

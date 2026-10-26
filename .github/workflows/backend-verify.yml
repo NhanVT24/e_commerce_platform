@@ -1,9 +1,9 @@
 name: Backend verification
 on:
   pull_request:
-    paths: ["apps/api/**", "infra/**", "scripts/test-inventory-outbox-infra.cjs", "package.json", "package-lock.json", ".github/workflows/backend-verify.yml"]
+    paths: ["apps/api/**", "infra/**", "scripts/test-*-infra.cjs", "package.json", "package-lock.json", ".github/workflows/backend-verify.yml"]
   push:
-    paths: ["apps/api/**", "infra/**", "scripts/test-inventory-outbox-infra.cjs", "package.json", "package-lock.json", ".github/workflows/backend-verify.yml"]
+    paths: ["apps/api/**", "infra/**", "scripts/test-*-infra.cjs", "package.json", "package-lock.json", ".github/workflows/backend-verify.yml"]
   workflow_dispatch:
 
 permissions:
@@ -40,6 +40,7 @@ jobs:
           npm run package:lambda -w @supermarket/api
           npx tsc --noEmit -p infra/tsconfig.json
           npm run test:infra:inventory-outbox
+          npm run test:infra:lambda-config
       - name: Start isolated DynamoDB Local
         run: >-
           docker run --detach --rm --name supermarket-phase7-dynamodb

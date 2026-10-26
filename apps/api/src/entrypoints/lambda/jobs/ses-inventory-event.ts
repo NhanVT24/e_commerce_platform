@@ -1,6 +1,6 @@
 import "reflect-metadata";
 import { z } from "zod";
-import { env } from "../../../config/env.js";
+import { emailConfig } from "../../../config/email-config.js";
 import { recordEmailFeedback } from "../../../modules/email-deliveries/infrastructure/email-feedback-store.js";
 import type { FeedbackStatus } from "../../../modules/email-deliveries/email-feedback.js";
 
@@ -87,7 +87,7 @@ export const handler = async (event: SnsEvent) => {
       topicArn: sns.TopicArn,
       messageBytes: Buffer.byteLength(sns.Message, "utf8")
     });
-    if (env.SES_EVENTS_TOPIC_ARN && sns.TopicArn !== env.SES_EVENTS_TOPIC_ARN) throw new Error("Unexpected SNS topic.");
+    if (emailConfig.SES_EVENTS_TOPIC_ARN && sns.TopicArn !== emailConfig.SES_EVENTS_TOPIC_ARN) throw new Error("Unexpected SNS topic.");
     const result = await processSesMessage(sns.Message);
     console.info("[ses-feedback] processed", { snsMessageId: sns.MessageId, ...result });
   }));

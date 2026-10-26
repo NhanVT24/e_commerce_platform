@@ -1,7 +1,7 @@
 import { QueryCommand, type AttributeValue } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { rawDb } from "../../../../database/dynamodb/client.js";
-import { env } from "../../../../config/env.js";
+import { databaseConfig } from "../../../../config/database-config.js";
 import type { CheckoutOrders, HeldOrder } from "../../application/ports/checkout-ports.js";
 import { createAwaitingPaymentOrder, attachPaymentTxnRef, transitionAwaitingPaymentOrder } from "./storefront.store.js";
 import { getAwaitingPaymentOrder } from "./order-record.store.js";
@@ -81,7 +81,7 @@ export class DynamoCheckoutOrders implements CheckoutOrders {
   async *expiredCandidates(now: string) {
     let cursor: Record<string, AttributeValue> | undefined;
     do {
-      const result = await rawDb.send(new QueryCommand({ TableName: env.DYNAMODB_TABLE_NAME,
+      const result = await rawDb.send(new QueryCommand({ TableName: databaseConfig.DYNAMODB_TABLE_NAME,
         IndexName: "EntityUpdatedAtIndex", ExclusiveStartKey: cursor, Limit: 100,
         KeyConditionExpression: "entityType = :entity",
         FilterExpression: "#status = :status AND lockedUntil <= :now",

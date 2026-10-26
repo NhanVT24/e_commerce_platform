@@ -3,14 +3,14 @@ import type { InventoryStockAlert } from "../../application/ports/inventory-aler
 import type { ProductStatus, ProductCounters } from "../../domain/product.js";
 import type { ProductCounterRepository } from "../../application/ports/product-counter-repository.js";
 import { TransactWriteItemsCommand } from "@aws-sdk/client-dynamodb";
-import { env } from "../../../../config/env.js";
+import { databaseConfig } from "../../../../config/database-config.js";
 import { rawDb } from "../../../../database/dynamodb/client.js";
 import { keys } from "../../../../database/dynamodb/keys.js";
 import type { ProductRecord } from "../../product.types.js";
 import { buildProductCategoryIndexKey, toProductCategoryIndexRecord } from "../../indexes/product-category.index.js";
 import { toProductRecord, toProduct } from "./product.mapper.js";
 import { readProductRecord, toDynamoItem, rethrowProductConflict, missingProductConflict } from "./product-record.store.js";
-const TableName = env.DYNAMODB_TABLE_NAME;
+const TableName = databaseConfig.DYNAMODB_TABLE_NAME;
 
 export async function incrementProductRecord(id: string, field: string, incrementBy = 1, expectedOwnerSub?: string, prepared?: { expectedVersion: number; nextValue: number; status: ProductStatus; inventoryAlert?: InventoryStockAlert; changedBy?: string }) {
   if (field !== "stock" && field !== "soldCount") {

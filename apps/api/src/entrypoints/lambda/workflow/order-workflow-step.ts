@@ -1,9 +1,13 @@
+import { readPaymentConfig } from "../../../config/payment-config.js";
 import "reflect-metadata";
 import { createStandaloneContext } from "../../../core/app/create-standalone-context.js";
 import { WorkflowCheckout } from "../../../modules/storefront/application/workflow-checkout/workflow-checkout.js";
 import { auditContext, serviceAuditContext } from "../../../modules/audit-log/audit-context.js";
 
 type WorkflowInput = { detail?: { email?: string; requestId?: string; items?: Array<{ productId: string; quantity: number }> } };
+
+// This runtime calls the payment provider; validate before any order mutation.
+readPaymentConfig();
 
 export const handler = async (event: WorkflowInput, lambdaContext?: { awsRequestId?: string }) => {
   const payload = event.detail ?? {};

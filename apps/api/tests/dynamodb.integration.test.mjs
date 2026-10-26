@@ -244,9 +244,10 @@ test("engine: publish-success/marker-failure repeats the same event without dupl
 
 test("engine HTTP: the composition flag writes an outbox event and retains the legacy response shape", async () => {
   const { createNestApp } = await import("../dist/src/core/app/create-app.js");
-  const { env } = await import("../dist/src/config/env.js");
-  const previous = { flag: env.INVENTORY_ALERT_OUTBOX_ENABLED, auth: env.AUTH_ALLOW_UNVERIFIED_JWT };
-  env.INVENTORY_ALERT_OUTBOX_ENABLED = true; env.AUTH_ALLOW_UNVERIFIED_JWT = true;
+  const { databaseConfig } = await import("../dist/src/config/database-config.js");
+  const { identityConfig: env } = await import("../dist/src/config/identity-config.js");
+  const previous = { flag: databaseConfig.INVENTORY_ALERT_OUTBOX_ENABLED, auth: env.AUTH_ALLOW_UNVERIFIED_JWT };
+  databaseConfig.INVENTORY_ALERT_OUTBOX_ENABLED = true; env.AUTH_ALLOW_UNVERIFIED_JWT = true;
   const app = await createNestApp();
   try {
     const id = await seedProduct();
@@ -256,7 +257,7 @@ test("engine HTTP: the composition flag writes an outbox event and retains the l
     assert.equal(response.statusCode, 200, response.body);
     assert.equal(response.json().stock, 5); assert.equal(response.json().version, 2);
     assert.equal((await read(`INVENTORY_ALERT_OUTBOX#inventory.stock.alert:${id}:2`)).event.stock, 5);
-  } finally { await app.close(); env.INVENTORY_ALERT_OUTBOX_ENABLED = previous.flag; env.AUTH_ALLOW_UNVERIFIED_JWT = previous.auth; }
+  } finally { await app.close(); databaseConfig.INVENTORY_ALERT_OUTBOX_ENABLED = previous.flag; env.AUTH_ALLOW_UNVERIFIED_JWT = previous.auth; }
 });
 
 test("engine: legacy completion commits status/audit together and never creates audit for a rejected transition", async () => {

@@ -1,6 +1,6 @@
 import { EventBridgeClient } from "@aws-sdk/client-eventbridge";
-import { env } from "../../config/env.js";
+import { awsConfig } from "../../config/aws-config.js";
 
 export const eventBridgeClient = new EventBridgeClient({
-  region: env.AWS_REGION
+  region: awsConfig.AWS_REGION
 });

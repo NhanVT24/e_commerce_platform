@@ -2,7 +2,7 @@ import { inventoryOutboxWrite } from "./inventory-alert-outbox.js";
 import type { InventoryStockAlert } from "../../application/ports/inventory-alert-publisher.js";
 import { readProductRecord, toDynamoItem, rethrowProductConflict } from "./product-record.store.js";
 import { TransactWriteItemsCommand } from "@aws-sdk/client-dynamodb";
-import { env } from "../../../../config/env.js";
+import { databaseConfig } from "../../../../config/database-config.js";
 import { rawDb } from "../../../../database/dynamodb/client.js";
 import { keys } from "../../../../database/dynamodb/keys.js";
 import { buildProductCategoryIndexKey, toProductCategoryIndexRecord } from "../../indexes/product-category.index.js";
@@ -11,7 +11,7 @@ import type { ProductStatus } from "../../domain/product.js";
 import type { ProductWriteRepository } from "../../application/ports/product-write-repository.js";
 import { normalizeText, toProductRecord, toProduct } from "./product.mapper.js";
 
-const TableName = env.DYNAMODB_TABLE_NAME;
+const TableName = databaseConfig.DYNAMODB_TABLE_NAME;
 
 export async function updateProductRecord(id: string, patch: ProductRecord, version: number, expectedOwnerSub?: string, status?: ProductStatus, alert?: InventoryStockAlert, changedBy = "") {
   const current = await readProductRecord(id);

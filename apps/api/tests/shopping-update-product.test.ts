@@ -1,4 +1,5 @@
 import "reflect-metadata";
+import { databaseConfig } from "../src/config/database-config.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { DynamoDBClient, TransactWriteItemsCommandInput } from "@aws-sdk/client-dynamodb";
@@ -11,7 +12,6 @@ import { deriveStockStatus } from "../src/modules/shopping/domain/stock-policy.j
 import { Product, type ProductSnapshot } from "../src/modules/shopping/domain/product.js";
 import { DynamoProductWriteRepository } from "../src/modules/shopping/infrastructure/persistence/dynamo-product-write-repository.js";
 import { rawDb } from "../src/database/dynamodb/client.js";
-import { env } from "../src/config/env.js";
 import { auditContext } from "../src/modules/audit-log/audit-context.js";
 
 const id = "10000000-0000-4000-8000-000000000001";
@@ -168,7 +168,7 @@ function fakeDynamo(client: DynamoDBClient, table: string) {
 }
 
 test("Dynamo adapter preserves transaction, category index, legacy response and audit actor", async () => {
-  const db = fakeDynamo(rawDb, env.DYNAMODB_TABLE_NAME);
+  const db = fakeDynamo(rawDb, databaseConfig.DYNAMODB_TABLE_NAME);
   try {
     const adapter = new DynamoProductWriteRepository();
     const snapshot = await adapter.findById(id);
@@ -199,7 +199,7 @@ test("Dynamo adapter preserves transaction, category index, legacy response and 
 });
 
 test("metadata-only update retains inventory alert markers and original price", async () => {
-  const db = fakeDynamo(rawDb, env.DYNAMODB_TABLE_NAME);
+  const db = fakeDynamo(rawDb, databaseConfig.DYNAMODB_TABLE_NAME);
   try {
     const saved = await new DynamoProductWriteRepository().update({ id, changes: { name: "Renamed" },
       status: "active", expectedVersion: 1 });
@@ -213,7 +213,7 @@ test("metadata-only update retains inventory alert markers and original price", 
 });
 
 test("two adapter writes with the same version have one winner in the conditional transport model", async () => {
-  const db = fakeDynamo(rawDb, env.DYNAMODB_TABLE_NAME);
+  const db = fakeDynamo(rawDb, databaseConfig.DYNAMODB_TABLE_NAME);
   try {
     const adapter = new DynamoProductWriteRepository();
     const input = { id, changes: { stock: 5 }, status: "low_stock" as const, expectedVersion: 1, expectedOwnerId: "owner" };
@@ -226,7 +226,7 @@ test("two adapter writes with the same version have one winner in the conditiona
 });
 
 test("changed owner/deleted record fail safely, while infrastructure errors keep their identity", async () => {
-  const db = fakeDynamo(rawDb, env.DYNAMODB_TABLE_NAME);
+  const db = fakeDynamo(rawDb, databaseConfig.DYNAMODB_TABLE_NAME);
   try {
     const adapter = new DynamoProductWriteRepository();
     const input = { id, changes: { stock: 5 }, status: "low_stock" as const, expectedVersion: 1, expectedOwnerId: "owner" };
@@ -248,7 +248,7 @@ test("changed owner/deleted record fail safely, while infrastructure errors keep
 });
 
 test("legacy maintenance export uses the same transaction implementation", async () => {
-  const db = fakeDynamo(rawDb, env.DYNAMODB_TABLE_NAME);
+  const db = fakeDynamo(rawDb, databaseConfig.DYNAMODB_TABLE_NAME);
   try {
     const { updateShoppingItem } = await import("../src/modules/shopping/shopping.repository.js");
     const saved = await updateShoppingItem(id, { stock: 0 }, 1);
@@ -267,8 +267,9 @@ test("compiled Nest module wires real HTTP validation, authorization, errors, au
   const { AppExceptionFilter } = await import("../dist/src/common/filters/app-exception.filter.js");
   const { AuditMutationInterceptor } = await import("../dist/src/modules/audit-log/audit-mutation.interceptor.js");
   const { rawDb: compiledDb } = await import("../dist/src/database/dynamodb/client.js");
-  const { env: compiledEnv } = await import("../dist/src/config/env.js");
-  const db = fakeDynamo(compiledDb, compiledEnv.DYNAMODB_TABLE_NAME);
+  const { identityConfig: compiledEnv } = await import("../dist/src/config/identity-config.js");
+  const { databaseConfig: compiledDatabaseConfig } = await import("../dist/src/config/database-config.js");
+  const db = fakeDynamo(compiledDb, compiledDatabaseConfig.DYNAMODB_TABLE_NAME);
   const originalAuth = compiledEnv.AUTH_ALLOW_UNVERIFIED_JWT;
   compiledEnv.AUTH_ALLOW_UNVERIFIED_JWT = true;
   const app = await NestFactory.create(ShoppingModule, new FastifyAdapter(), { logger: false });

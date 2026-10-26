@@ -1,11 +1,11 @@
 import { GetItemCommand } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
-import { env } from "../../../../config/env.js";
+import { databaseConfig } from "../../../../config/database-config.js";
 import { rawDb } from "../../../../database/dynamodb/client.js";
 import { keys } from "../../../../database/dynamodb/keys.js";
 import type { ProductRecord } from "../../product.types.js";
 import { ProductMutationError } from "../../application/product-mutation.error.js";
-const TableName = env.DYNAMODB_TABLE_NAME;
+const TableName = databaseConfig.DYNAMODB_TABLE_NAME;
 export const toDynamoItem = (item: Record<string, unknown>) => marshall(item, { removeUndefinedValues: true });
 
 export async function readProductRecord(id: string): Promise<ProductRecord | null> {

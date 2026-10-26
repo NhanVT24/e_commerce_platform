@@ -1,5 +1,5 @@
 import { SendEmailCommand } from "@aws-sdk/client-sesv2";
-import { env } from "../../config/env.js";
+import { emailConfig } from "../../config/email-config.js";
 import { sesTrackingTags } from "../../modules/email-deliveries/email-delivery.repository.js";
 import type { InventoryReportProduct } from "../../modules/shopping/shopping.repository.js";
 import { sesClient } from "./client.js";
@@ -65,17 +65,17 @@ function buildInventoryDigestHtml(input: InventoryDigestInput) {
 }
 
 export async function sendInventoryDigestEmail(input: InventoryDigestInput) {
-  if (!env.SES_INVENTORY_REPORT_CONFIGURATION_SET_NAME) throw new Error("Missing SES feedback configuration set.");
-  const recipientEmail = input.recipientEmail?.trim() || env.ADMIN_REPORT_EMAIL;
-  if (!env.SES_FROM_EMAIL || !recipientEmail) {
+  if (!emailConfig.SES_INVENTORY_REPORT_CONFIGURATION_SET_NAME) throw new Error("Missing SES feedback configuration set.");
+  const recipientEmail = input.recipientEmail?.trim() || emailConfig.ADMIN_REPORT_EMAIL;
+  if (!emailConfig.SES_FROM_EMAIL || !recipientEmail) {
     throw new Error("Missing SES_FROM_EMAIL or inventory report recipient configuration.");
   }
 
   const result = await sesClient.send(new SendEmailCommand({
-    FromEmailAddress: env.SES_FROM_EMAIL,
-    ReplyToAddresses: env.SES_REPLY_TO_EMAIL ? [env.SES_REPLY_TO_EMAIL] : undefined,
+    FromEmailAddress: emailConfig.SES_FROM_EMAIL,
+    ReplyToAddresses: emailConfig.SES_REPLY_TO_EMAIL ? [emailConfig.SES_REPLY_TO_EMAIL] : undefined,
     Destination: { ToAddresses: [recipientEmail] },
-    ConfigurationSetName: env.SES_INVENTORY_REPORT_CONFIGURATION_SET_NAME,
+    ConfigurationSetName: emailConfig.SES_INVENTORY_REPORT_CONFIGURATION_SET_NAME,
     // SES copies these tags to SNS feedback events so the receiving Lambda can find this report.
     EmailTags: [
       ...sesTrackingTags({ emailId: input.emailId, recipientId: input.emailId, emailType: "inventory_daily_report" }),

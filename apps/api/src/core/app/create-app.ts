@@ -5,11 +5,14 @@ import { FastifyAdapter, type NestFastifyApplication } from "@nestjs/platform-fa
 import { getRequestPrincipal } from "../../common/auth/request-principal.js";
 import { AppExceptionFilter } from "../../common/filters/app-exception.filter.js";
 import { createNestLogger } from "../../common/logging/nest-logger.js";
-import { env } from "../../config/env.js";
+import { httpConfig } from "../../config/http-config.js";
 import { AppModule } from "./app.module.js";
+import { readPaymentConfig } from "../../config/payment-config.js";
 import { isCustomerOrderMutation } from "./storefront-request-policy.js";
 
 export async function createNestApp(): Promise<NestFastifyApplication> {
+  // HTTP exposes payment endpoints; fail before accepting traffic if credentials are missing.
+  readPaymentConfig();
   const adapter = new FastifyAdapter({ logger: {
     // Signed callback URLs are read capabilities; never put them in access logs.
     serializers: {
@@ -23,7 +26,7 @@ export async function createNestApp(): Promise<NestFastifyApplication> {
   app.useLogger(createNestLogger());
   app.flushLogs();
 
-  const storefrontOrigin = env.STOREFRONT_PUBLIC_URL ? new URL(env.STOREFRONT_PUBLIC_URL).origin : undefined;
+  const storefrontOrigin = httpConfig.STOREFRONT_PUBLIC_URL ? new URL(httpConfig.STOREFRONT_PUBLIC_URL).origin : undefined;
   const allowedProductionOrigins = new Set<string>();
   if (storefrontOrigin) {
     const storefrontUrl = new URL(storefrontOrigin);
@@ -242,6 +245,6 @@ export async function createNestApp(): Promise<NestFastifyApplication> {
 
 export async function startNestApp() {
   const app = await createNestApp();
-  await app.listen({ port: env.PORT, host: "0.0.0.0" });
+  await app.listen({ port: httpConfig.PORT, host: "0.0.0.0" });
   return app;
 }
