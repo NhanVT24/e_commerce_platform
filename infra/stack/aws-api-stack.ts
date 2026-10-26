@@ -72,6 +72,11 @@ export class AwsApiStack extends Stack {
       throw new Error("apiCertificateArn is required when apiCustomDomainName is provided.");
     }
 
+    const inventoryOutboxEnabled = new CfnParameter(this, "InventoryAlertOutboxEnabled", {
+      type: "String", default: "false", allowedValues: ["true", "false"],
+      description: "Enable durable inventory alerts after deploying relay and compatible consumers."
+    });
+
     const callbackUrl = new CfnParameter(this, "CallbackUrl", {
       type: "String",
       default: "https://dwft9aemqzcp.cloudfront.net/auth/callback",
@@ -667,6 +672,7 @@ export class AwsApiStack extends Stack {
       EVENTBRIDGE_COMMERCE_ARCHIVE_ARN: commerceArchive.attrArn,
       EVENTBRIDGE_PAYMENT_ARCHIVE_ARN: paymentArchive.attrArn,
       EVENTBRIDGE_PLATFORM_ARCHIVE_ARN: platformArchive.attrArn,
+      INVENTORY_ALERT_OUTBOX_ENABLED: inventoryOutboxEnabled.valueAsString,
       EMAIL_EVENT_PUBLISH_MAX_ATTEMPTS: "5",
       EMAIL_EVENT_PUBLISH_RETRY_BASE_SECONDS: "60",
       EMAIL_EVENT_PUBLISH_RETRY_MAX_SECONDS: "900",
@@ -943,6 +949,36 @@ export class AwsApiStack extends Stack {
       30,
       256
     );
+    // Dedicated relay: no HTTP/SES/payment privileges or provider secrets.
+    const inventoryOutboxRelay = new lambda.Function(this, "InventoryAlertOutboxRelayFunction", {
+      functionName: "supermarket-inventory-alert-outbox-relay", runtime: lambda.Runtime.NODEJS_24_X,
+      architecture: lambda.Architecture.X86_64, code: sharedLambdaCode,
+      handler: "src/entrypoints/lambda/jobs/inventory-alert-relay.handler",
+      timeout: Duration.seconds(30), memorySize: 256,
+      environment: { DYNAMODB_TABLE_NAME: table.ref, EVENTBRIDGE_PLATFORM_BUS_NAME: platformEventBus.eventBusName }
+    });
+    inventoryOutboxRelay.addToRolePolicy(new iam.PolicyStatement({
+      actions: ["dynamodb:Query"], resources: [table.attrArn + "/index/EntityUpdatedAtIndex"]
+    }));
+    inventoryOutboxRelay.addToRolePolicy(new iam.PolicyStatement({
+      actions: ["dynamodb:UpdateItem"], resources: [table.attrArn]
+    }));
+    platformEventBus.grantPutEventsTo(inventoryOutboxRelay);
+    new events.Rule(this, "InventoryAlertOutboxRelaySchedule", {
+      schedule: events.Schedule.rate(Duration.minutes(1)),
+      targets: [new eventsTargets.LambdaFunction(inventoryOutboxRelay, { retryAttempts: 2 })]
+    });
+    new cloudwatch.Alarm(this, "InventoryAlertOutboxRelayErrors", {
+      metric: inventoryOutboxRelay.metricErrors(), threshold: 1, evaluationPeriods: 1,
+      alarmDescription: "Inventory alert outbox relay failed; inspect pending and FAILED records."
+    }).addAlarmAction(new cloudwatchActions.SnsAction(adminAlertsTopic));
+    new cloudwatch.Alarm(this, "InventoryAlertOutboxFailedEvents", {
+      metric: new cloudwatch.Metric({ namespace: "Supermarket/InventoryOutbox", metricName: "Failed",
+        dimensionsMap: { Service: "inventory-alert-relay" }, statistic: "Sum", period: Duration.minutes(5) }),
+      threshold: 1, evaluationPeriods: 1, treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      alarmDescription: "Inventory outbox attempts exhausted; inspect FAILED events before requeue."
+    }).addAlarmAction(new cloudwatchActions.SnsAction(adminAlertsTopic));
+
     new lambda.EventInvokeConfig(this, "EmailRouteTrackerInvokeConfig", {
       function: emailRouteTrackerFunction,
       maxEventAge: Duration.hours(1),
