@@ -33,6 +33,7 @@
     "test:domain": "npm run build:ts && tsx --test tests/rich-domain-entities.test.ts",
     "test:workflows": "npm run build:ts && tsx --test tests/workflow-orchestration.test.ts tests/notification-workflows.test.ts tests/email-workflows.test.ts tests/business-workflows.test.ts",
     "test:outbox": "npm run build:ts && tsx --test tests/inventory-outbox.test.ts"
+
   },
   "dependencies": {
     "@aws-crypto/client-node": "^5.0.2",

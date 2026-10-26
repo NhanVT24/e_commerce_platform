@@ -42,6 +42,7 @@ const { IncrementProductField } = await import("../dist/src/modules/shopping/app
 const { DynamoProductCounterRepository } = await import("../dist/src/modules/shopping/infrastructure/persistence/dynamo-product-counter-repository.js");
 const { RelayInventoryAlerts } = await import("../dist/src/modules/shopping/application/relay-inventory-alerts.js");
 const { NotificationUseCases } = await import("../dist/src/modules/notifications/application/notifications.js");
+
 let created = false;
 const email = "integration@example.test", actor = { subject: "integration-owner", isAdmin: false };
 const read = async (PK, SK = "DETAIL") => {
