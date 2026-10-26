@@ -17,6 +17,7 @@ export class CreatePayment {
     private readonly now: () => number = Date.now) {}
   async execute(input: CreatePaymentInput, ipAddress: string, options: PaymentCreationOptions = {}) {
     const draft = new PaymentDraft(input.items);
+    draft.assertValidItems();
     let total = 0;
     // Checkout supplies the committed sale-price snapshot. Do not recompute
     // it from today's product price or reject a product deleted after the hold.

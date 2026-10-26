@@ -61,11 +61,6 @@ export type NewProductDetails = ProductChanges & Required<Pick<ProductChanges, "
 export class Product {
     readonly #state: Readonly<ProductSnapshot>;
     constructor(snapshot: ProductSnapshot) {
-        if (!Number.isSafeInteger(snapshot.stock) || snapshot.stock < 0 ||
-            !Number.isSafeInteger(snapshot.soldCount ?? 0) || (snapshot.soldCount ?? 0) < 0 ||
-            !Number.isSafeInteger(snapshot.version) || snapshot.version < 0) {
-            throw new ProductMutationError("INVALID_INPUT", "Invalid product snapshot");
-        }
         // Preserve the stored status so a stale projection can be repaired and can
         // still cause the same transition alert as before. Mutations derive it anew.
         this.#state = Object.freeze({ ...snapshot, soldCount: snapshot.soldCount ?? 0 });
@@ -80,11 +75,23 @@ export class Product {
     get stockStatus(): ProductStatus { return Product.stockStatus(this.stock); }
     get version() { return this.#state.version; }
     toSnapshot(): ProductSnapshot { return { ...this.#state }; }
+    /** Only the counters/version needed for safe writes, not a DTO schema check.
+     * Rehydration is passive; creation/mutation paths opt into these invariants.
+     */
+    assertValidState(): void {
+        if (!Number.isSafeInteger(this.stock) || this.stock < 0 ||
+            !Number.isSafeInteger(this.soldCount) || this.soldCount < 0 ||
+            !Number.isSafeInteger(this.version) || this.version < 0) {
+            throw new ProductMutationError("INVALID_INPUT", "Invalid product snapshot");
+        }
+    }
     static create(id: string, ownerId: string, details: NewProductDetails): Product {
         Product.assertEditableStock(details.stock);
-        return new Product({ ...details, id, ownerId, version: 1,
+        const product = new Product({ ...details, id, ownerId, version: 1,
             rating: details.rating ?? 4.8, soldCount: details.soldCount ?? 0,
             featured: details.featured ?? false, status: Product.stockStatus(details.stock) });
+        product.assertValidState();
+        return product;
     }
     static stockStatus(stock: number): ProductStatus {
         // Historical legacy callers still classify non-positive stock as sold out.
@@ -121,17 +128,21 @@ export class Product {
         }
     }
     update(changes: ProductChanges): Product {
+        this.assertValidState();
         this.assertVersionCanAdvance();
         if (changes.stock !== undefined)
             Product.assertEditableStock(changes.stock);
         const stock = changes.stock ?? this.stock;
-        return new Product({ ...this.#state, ...changes, id: this.id, ownerId: this.ownerId,
+        const next = new Product({ ...this.#state, ...changes, id: this.id, ownerId: this.ownerId,
             version: this.version, stock, status: Product.stockStatus(stock) });
+        next.assertValidState();
+        return next;
     }
     /** Administrative adjustment preserves the existing clamp-to-zero behavior.
      * This is not a checkout reservation, which must reject insufficient stock.
      */
     adjustCounter(field: ProductCounterField, delta: number): Product {
+        this.assertValidState();
         this.assertVersionCanAdvance();
         if (field !== "stock" && field !== "soldCount") {
             throw new ProductMutationError("INVALID_INPUT", "Invalid product counter");
@@ -164,6 +175,7 @@ export class Product {
         stock: number;
         sold: number;
     }, reservedStock = 0): Product {
+        this.assertValidState();
         const stock = this.stock + delta.stock, soldCount = this.soldCount + delta.sold;
         if (![delta.stock, delta.sold, stock, soldCount, reservedStock, this.version + 1].every(Number.isSafeInteger) ||
             stock < 0 || soldCount < 0 || reservedStock < 0 || stock < reservedStock) {

@@ -1,4 +1,5 @@
 import { Notification } from "../domain/notification.js";
+import type { InventoryEffects } from "./ports/inventory-notifications.js";
 import { ConfirmOrderPayment } from "../../storefront/application/confirm-order-payment/confirm-order-payment.js";
 import { PaymentReviewRequired } from "../../storefront/application/ports/payment-review.js";
 import { CompleteNotifiedOrder } from "./complete-notified-order.js";
@@ -6,6 +7,8 @@ import { ApplicationError } from "../../../common/application/application-error.
 import { logQueueWarn, logQueueBusinessEvent, type ApplicationLogger } from "../../../common/application/queue-events.js";
 import type { NotificationEffects, NotificationConfig, NotificationRecord, NotificationOrder } from "./ports.js";
 export type NotificationEvent = {
+    eventId?: string;
+    productVersion?: number;
     type?: string;
     email?: string;
     txnRef?: string;
@@ -400,6 +403,7 @@ export class NotificationUseCases {
             return this.processPaymentFailedEvent(payload);
         }
         if (payload.type === "inventory.stock.alert") {
+            if (payload.eventId !== undefined) return this.processDurableInventoryAlert(payload);
             return this.processInventoryStockAlert(payload);
         }
         if (payload.type !== "notification.pending" || !payload.notificationId) {
@@ -742,6 +746,40 @@ export class NotificationUseCases {
             auditQueued: true,
             failureReason
         };
+    }
+    private async processDurableInventoryAlert(payload: NotificationEvent) {
+        const { productId, productName, productVersion, eventId } = payload;
+        if (!productId || !productName || !Number.isSafeInteger(productVersion) || productVersion < 1 ||
+            eventId !== `inventory.stock.alert:${productId}:${productVersion}` ||
+            (payload.status !== "low_stock" && payload.status !== "out_of_stock") ||
+            !Number.isSafeInteger(payload.stock) || payload.stock < 0) throw new Error("Invalid durable inventory event");
+        if (!this.config.adminEmail || !this.effects.inventory) throw new Error("Inventory notification storage/recipient is not configured");
+        const level = payload.status;
+        const title = level === "out_of_stock" ? "Product Out of Stock" : "Product Low on Stock";
+        const message = `${productName}: ${level}. Current quantity: ${payload.stock}.`;
+        const metadata = { audience: "admin", alertType: "inventory.stock.alert", eventId, productVersion,
+            productId, productName, stock: payload.stock, previousStock: payload.previousStock,
+            status: level, source: payload.source, changedBy: payload.changedBy };
+        const claim = await this.effects.inventory.createOnce({ eventId, email: this.config.adminEmail, title, message, metadata });
+        if (!claim.created) return { type: "inventory.stock.alert", eventId, notificationId: claim.notificationId, duplicate: true };
+        const effects: InventoryEffects = { notification: "SKIPPED", audit: "SKIPPED", sns: "SKIPPED" };
+        const attempt = async (name: keyof InventoryEffects, enabled: boolean, run: () => Promise<unknown>) => {
+            if (!enabled) return;
+            try { await run(); effects[name] = "SUCCEEDED"; }
+            catch { effects[name] = "UNKNOWN"; }
+        };
+        // No blind resend after an ambiguous external result. The durable database
+        // notification exists independently; receipt records incomplete effects.
+        await attempt("notification", this.config.platformEventsEnabled, () => this.effects.publish({ channel: "platform",
+            source: "supermarket.platform", detailType: "notifications.pending", detail: {
+                type: "notification.pending", channel: "system", title, message, notificationId: claim.notificationId, email: this.config.adminEmail, metadata } }));
+        await attempt("audit", this.config.platformEventsEnabled, () => this.publishAuditLog({ eventType: "inventory.stock.alerted",
+            email: this.config.adminEmail, resourceId: productId, metadata }));
+        await attempt("sns", this.config.adminAlertsEnabled, () => this.effects.adminAlert({ subject: `${title}: ${productName}`,
+            message, attributes: { alertType: "inventory.stock.alert", eventId, productId, stock: payload.stock } }));
+        await this.effects.inventory.finish({ ...claim, eventId, email: this.config.adminEmail, effects });
+        if (Object.values(effects).includes("UNKNOWN")) this.logger.warn(JSON.stringify({ event: "inventory.effects.unknown", eventId, effects }));
+        return { type: "inventory.stock.alert", eventId, notificationId: claim.notificationId, effects };
     }
     private async processInventoryStockAlert(payload: {
         alertLevel?: string;

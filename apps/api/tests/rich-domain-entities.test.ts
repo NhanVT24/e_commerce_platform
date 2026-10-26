@@ -17,6 +17,8 @@ import { EmailRoute } from "../src/modules/email-deliveries/domain/email-route.j
 import { Notification } from "../src/modules/notifications/domain/notification.js";
 import { RevenueReport } from "../src/modules/storefront/domain/revenue-report.js";
 import { UploadScope } from "../src/modules/uploads/domain/upload-scope.js";
+import { SignUpEmail } from "../src/modules/customers/authorization/domain/sign-up-email.js";
+import { CreatePayment } from "../src/modules/vnpay/application/create-payment.js";
 
 const snapshot: ProductSnapshot = { id: "product", ownerId: "owner", name: "Product", stock: 20, status: "active", version: 3, soldCount: 2 };
 const now = Date.parse("2026-10-22T00:00:00Z");
@@ -35,6 +37,21 @@ test("Product rehydration creates real methods; snapshots do not share mutable e
   assert.equal(restored.version, 3);
   const output = restored.toSnapshot(); Reflect.set(output, "stock", 0);
   assert.equal(restored.stock, 20);
+});
+
+test("Product construction copies data; necessary write invariants are explicit", () => {
+  for (const patch of [{ stock: -1 }, { stock: NaN }, { soldCount: -1 }, { version: -1 }, { version: Infinity }]) {
+    const raw = { ...snapshot, ...patch };
+    const entity = new Product(raw);
+    assert.ok(entity instanceof Product);
+    assert.throws(() => entity.assertValidState(), { code: "INVALID_INPUT" });
+    assert.throws(() => entity.update({ name: "Next" }), { code: "INVALID_INPUT" });
+    assert.throws(() => entity.adjustCounter("stock", 1), { code: "INVALID_INPUT" });
+    assert.throws(() => entity.changeInventory({ stock: 0, sold: 0 }), { code: "INVALID_INPUT" });
+  }
+  const valid = new Product(snapshot);
+  assert.throws(() => valid.update({ soldCount: -1 }), { code: "INVALID_INPUT" });
+  assert.equal(valid.soldCount, 2);
 });
 
 test("Product owns counter transitions, limits, ownership, version and alert decisions", () => {
@@ -85,10 +102,10 @@ test("Order owns hidden ownership, refund window, correlation and pending claim 
 
 test("OrderItems normalize duplicates and isolate constructor/output arrays", () => {
   const lines = [{ productId: "PRODUCT#one", quantity: 2 }, { productId: "one", quantity: 3 }];
-  const cart = new OrderItems(lines); lines[0].quantity = 50;
+  const cart = OrderItems.create(lines); lines[0].quantity = 50;
   const output = cart.toSnapshot(); assert.deepEqual(output, [{ productId: "one", quantity: 5 }]);
   output[0].quantity = 50; assert.equal(cart.toSnapshot()[0].quantity, 5);
-  assert.throws(() => new OrderItems([{ productId: "one", quantity: 30 }, { productId: "one", quantity: 30 }]), /Maximum quantity/);
+  assert.throws(() => OrderItems.create([{ productId: "one", quantity: 30 }, { productId: "one", quantity: 30 }]), /Maximum quantity/);
 });
 
 test("Payment rejects inconsistent outcomes and builds only final undispatched events", () => {
@@ -136,12 +153,36 @@ test("UserAccount and profile changes own sign-in, self-block and avatar ownersh
   assert.throws(() => user.assertCanReceiveTokens(), /not allowed/);
   assert.throws(() => user.statusChangedBy("owner", "BLOCKED"), /own account/);
   assert.equal(user.statusChangedBy("admin", "ACTIVE").canSignIn, true);
-  assert.throws(() => new ProfileChange("owner", { avatarKey: "public/avatars/other/image" }), /not allowed/);
+  assert.throws(() => new ProfileChange("owner", { avatarKey: "public/avatars/other/image" }).assertAllowed(), /not allowed/);
   const change = new ProfileChange("owner", { avatarKey: "" });
   assert.deepEqual(change.toSnapshot(), { avatarKey: "" });
   const profile = new UserProfile("owner", { displayName: "User", avatarKey: "", addresses: [] });
   assert.equal(profile.update({ displayName: "Next" }).toSnapshot().displayName, "Next");
   assert.equal(profile.toSnapshot().displayName, "User");
+});
+
+test("Value object constructors copy input; explicit assertions enforce action-specific rules", () => {
+  const email = new SignUpEmail("");
+  assert.equal(email.value, "");
+  assert.throws(() => email.assertAllowedBy({ allowedDomains: [], blockedDomains: [], blockedEmails: [] }), /Email is required/);
+  const change = new ProfileChange("owner", { avatarKey: "public/avatars/other/image" });
+  assert.equal(change.avatarKey, "public/avatars/other/image");
+  assert.throws(() => change.assertAllowed(), /not allowed/);
+  const cart = new OrderItems([{ productId: "one", quantity: 0 }]);
+  assert.equal(cart.toSnapshot()[0].quantity, 0);
+  assert.throws(() => cart.assertValid(), /Invalid checkout item/);
+  const draft = new PaymentDraft([{ productId: "one", quantity: 0 }]);
+  assert.throws(() => draft.assertValidItems(), /Invalid payment item/);
+});
+
+test("Payment validation still precedes provider calls when checkout supplies an amount override", async () => {
+  let reads = 0, issues = 0;
+  const flow = new CreatePayment({ async find() { reads++; return null; } }, {
+    async issue() { issues++; throw new Error("Provider must not be called"); }
+  });
+  await assert.rejects(flow.execute({ items: [{ productId: "one", quantity: 0 }] }, "127.0.0.1",
+    { skipStockValidation: true, amount: 1000 }), /Invalid payment item/);
+  assert.equal(reads, 0); assert.equal(issues, 0);
 });
 
 test("Email entities retain uncertainty, affected-recipient attribution and content redaction", () => {

@@ -9,7 +9,7 @@ export class PrepareSignUp {
         verifyNative: boolean;
     }) { }
     async execute(email: string, source: "external" | "native" | "other") {
-        new SignUpEmail(email, this.policy);
+        new SignUpEmail(email).assertAllowedBy(this.policy);
         if (source === "external") {
             await this.users.link();
             return { autoConfirmUser: true, autoVerifyEmail: true };

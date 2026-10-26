@@ -31,7 +31,7 @@ function fixture(current: ProductSnapshot | null = product) {
     }
   };
   const publisher = { async publish(alert: InventoryStockAlert) { alerts.push(alert); } };
-  return { useCase: new UpdateProduct(repository, publisher), repository, publisher, alerts, writes, representation };
+  return { useCase: new UpdateProduct(repository, publisher, "direct"), repository, publisher, alerts, writes, representation };
 }
 
 test("stock policy keeps the exact 0/1/10/11 boundaries", () => {
@@ -77,6 +77,13 @@ test("invalid stock/version/identity is rejected before persistence", async () =
     await assert.rejects(fixture().useCase.execute({ ...command, expectedVersion }), hasCode("INVALID_INPUT"));
   }
   await assert.rejects(fixture().useCase.execute({ ...command, actor: { subject: "", isAdmin: true } }), hasCode("INVALID_INPUT"));
+});
+
+test("hydrating an invalid stored product is passive but its update cannot write or publish", async () => {
+  const f = fixture({ ...product, soldCount: -1 });
+  assert.ok(await f.repository.findById(id) instanceof Product);
+  await assert.rejects(f.useCase.execute(command), hasCode("INVALID_INPUT"));
+  assert.equal(f.writes.length, 0); assert.equal(f.alerts.length, 0);
 });
 
 test("alerts only on entering low/out status, including updates without a stock patch", async () => {

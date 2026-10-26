@@ -1,3 +1,4 @@
+import { DynamoInventoryNotifications } from "./inventory-notifications.js";
 import type { NotificationEffects, NotificationConfig } from "../application/ports.js";
 import { env } from "../../../config/env.js";
 import * as store from "../notifications.repository.js";
@@ -10,6 +11,7 @@ export const notificationConfig = (): NotificationConfig => ({ platformEventsEna
     paymentEventsEnabled: Boolean(env.EVENTBRIDGE_PAYMENT_BUS_NAME), commerceEventsEnabled: Boolean(env.EVENTBRIDGE_COMMERCE_BUS_NAME),
     adminAlertsEnabled: Boolean(env.SNS_ADMIN_ALERTS_TOPIC_ARN), adminEmail: env.ADMIN_REPORT_EMAIL });
 export const notificationEffects: NotificationEffects = {
+    inventory: new DynamoInventoryNotifications(),
     store: { createNotification: store.createNotification, deleteNotification: store.deleteNotification, deleteNotifications: store.deleteNotifications,
         listAllNotifications: store.listAllNotifications, listNotificationsByCustomer: store.listNotificationsByCustomer,
         markNotificationAsRead: store.markNotificationAsRead, markNotificationAsSent: store.markNotificationAsSent },

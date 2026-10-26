@@ -22,6 +22,7 @@ export class UpdateProfile {
     constructor(private readonly profiles: ProfileRepository, private readonly avatars: ProfileAvatars, private readonly queries: ProfileQueries) { }
     async execute(subject: string, patch: ProfilePatch) {
         const change = new ProfileChange(subject, patch);
+        change.assertAllowed();
         if (change.avatarKey) {
             if (!await this.avatars.exists(change.avatarKey))
                 throw new ApplicationError("INVALID_INPUT", "Avatar image does not exist.");

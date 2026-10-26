@@ -40,7 +40,7 @@ function incrementFixture(current: ProductSnapshot | null = snapshot) {
     }
   };
   const publisher = { async publish(alert: InventoryStockAlert) { alerts.push(alert); } };
-  return { repository, publisher, writes, alerts, useCase: new IncrementProductField(repository, publisher) };
+  return { repository, publisher, writes, alerts, useCase: new IncrementProductField(repository, publisher, "direct") };
 }
 
 test("counter policy preserves clamp and checks safe integer overflow without a new 999999 cap", () => {
@@ -84,6 +84,17 @@ test("increment rejects missing/forbidden/invalid requests before writing", asyn
   const overflow = incrementFixture({ ...snapshot, soldCount: Number.MAX_SAFE_INTEGER });
   await assert.rejects(overflow.useCase.execute({ productId: id, field: "soldCount", incrementBy: 1, actor: owner }), hasCode("INVALID_INPUT"));
   assert.equal(f.writes.length + missing.writes.length + forbidden.writes.length + overflow.writes.length, 0);
+});
+
+test("invalid stored state is asserted before counter updates or deletion", async () => {
+  const bad = { ...snapshot, soldCount: -1 };
+  const increment = incrementFixture(bad);
+  await assert.rejects(increment.useCase.execute({ productId: id, field: "stock", incrementBy: 1, actor: owner }), hasCode("INVALID_INPUT"));
+  assert.equal(increment.writes.length, 0); assert.equal(increment.alerts.length, 0);
+  let deletes = 0;
+  const remove = new DeleteProduct({ async findById() { return new Product(bad); }, async delete() { deletes++; } });
+  await assert.rejects(remove.execute({ productId: id, actor: owner }), hasCode("INVALID_INPUT"));
+  assert.equal(deletes, 0);
 });
 
 test("increment never retries commit/publish and never alerts after a failed write", async () => {

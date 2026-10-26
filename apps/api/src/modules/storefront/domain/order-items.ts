@@ -4,6 +4,10 @@ import type { CheckoutItem } from "./checkout.js";
 export class OrderItems {
     readonly #items: readonly Readonly<CheckoutItem>[];
     constructor(items: readonly CheckoutItem[]) {
+        this.#items = Object.freeze(items.map(item => Object.freeze({ ...item })));
+    }
+    /** New carts are normalized and checked explicitly; the constructor only copies. */
+    static create(items: readonly CheckoutItem[]): OrderItems {
         if (!Array.isArray(items) || items.length === 0 || items.length > 20) {
             throw new OrderActionError("INVALID_INPUT", "Checkout requires 1 to 20 items.");
         }
@@ -18,7 +22,8 @@ export class OrderItems {
                 throw new OrderActionError("INVALID_INPUT", "Maximum quantity per product is 50.");
             merged.set(id, quantity);
         }
-        this.#items = Object.freeze([...merged].map(([productId, quantity]) => Object.freeze({ productId, quantity })));
+        return new OrderItems([...merged].map(([productId, quantity]) => ({ productId, quantity })));
     }
+    assertValid(): void { OrderItems.create(this.#items); }
     toSnapshot(): CheckoutItem[] { return this.#items.map(item => ({ ...item })); }
 }

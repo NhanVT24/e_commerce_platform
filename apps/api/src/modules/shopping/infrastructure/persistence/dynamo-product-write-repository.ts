@@ -1,3 +1,5 @@
+import { inventoryOutboxWrite } from "./inventory-alert-outbox.js";
+import type { InventoryStockAlert } from "../../application/ports/inventory-alert-publisher.js";
 import { readProductRecord, toDynamoItem, rethrowProductConflict } from "./product-record.store.js";
 import { TransactWriteItemsCommand } from "@aws-sdk/client-dynamodb";
 import { env } from "../../../../config/env.js";
@@ -11,7 +13,7 @@ import { normalizeText, toProductRecord, toProduct } from "./product.mapper.js";
 
 const TableName = env.DYNAMODB_TABLE_NAME;
 
-export async function updateProductRecord(id: string, patch: ProductRecord, version: number, expectedOwnerSub?: string, status?: ProductStatus) {
+export async function updateProductRecord(id: string, patch: ProductRecord, version: number, expectedOwnerSub?: string, status?: ProductStatus, alert?: InventoryStockAlert, changedBy = "") {
   const current = await readProductRecord(id);
   if (!current) {
     const error = new Error("Product not found");
@@ -102,7 +104,8 @@ export async function updateProductRecord(id: string, patch: ProductRecord, vers
           TableName,
           Item: toDynamoItem(toProductCategoryIndexRecord({ ...keys.product(id), ...mergedRecord }))
         }
-      }
+      },
+      ...inventoryOutboxWrite(alert, nextVersion, changedBy, TableName, id)
     ]
   }));
 
@@ -119,7 +122,7 @@ export class DynamoProductWriteRepository implements ProductWriteRepository<Prod
   async update(input: Parameters<ProductWriteRepository<ProductRecord>["update"]>[0]) {
     try {
       const record = await updateProductRecord(
-        input.id, { ...input.changes }, input.expectedVersion, input.expectedOwnerId, input.status
+        input.id, { ...input.changes }, input.expectedVersion, input.expectedOwnerId, input.status, input.inventoryAlert, input.changedBy
       );
       return { product: toProduct(record), representation: record };
     } catch (error) {
