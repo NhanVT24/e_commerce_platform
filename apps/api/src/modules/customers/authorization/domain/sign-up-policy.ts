@@ -4,4 +4,4 @@ export interface SignUpPolicy {
     blockedDomains: string[];
     blockedEmails: string[];
 }
-export function assertSignUpEmail(email: string, policy: SignUpPolicy) { new SignUpEmail(email, policy); }
+export function assertSignUpEmail(email: string, policy: SignUpPolicy) { new SignUpEmail(email).assertAllowedBy(policy); }

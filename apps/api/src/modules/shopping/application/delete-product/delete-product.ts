@@ -11,6 +11,7 @@ export class DeleteProduct {
     if (!productId.trim()) throw new ProductMutationError("INVALID_INPUT", "Invalid product ID");
     const current = await this.products.findById(productId);
     assertCanManageProduct(current, actor);
+    current.assertValidState();
     await this.products.delete({ id: productId, expectedVersion: current.version,
       expectedOwnerId: actor.isAdmin ? undefined : actor.subject });
   }

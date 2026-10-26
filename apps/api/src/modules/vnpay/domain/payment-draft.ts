@@ -1,9 +1,14 @@
 export class PaymentDraft {
-    readonly #quantities: ReadonlyMap<string, number>;
+    readonly #items: readonly Readonly<{ productId: string; quantity: number }>[];
     constructor(items: readonly {
         productId: string;
         quantity: number;
     }[]) {
+        this.#items = Object.freeze(items.map(item => Object.freeze({ ...item })));
+    }
+    assertValidItems(): void { this.validatedQuantities(); }
+    private validatedQuantities(): Map<string, number> {
+        const items = this.#items;
         if (!items.length || items.length > 20)
             throw new Error("Invalid payment items");
         const quantities = new Map<string, number>();
@@ -15,9 +20,9 @@ export class PaymentDraft {
                 throw new Error("Invalid payment quantity");
             quantities.set(item.productId, quantity);
         }
-        this.#quantities = quantities;
+        return quantities;
     }
-    quantities() { return [...this.#quantities]; }
+    quantities() { return [...this.validatedQuantities()]; }
     lineAmount(id: string, product: {
         name?: string;
         price?: number;
@@ -25,7 +30,7 @@ export class PaymentDraft {
     } | null, skipStockValidation = false) {
         if (!product)
             throw new Error(`Product ${id} not found`);
-        const quantity = this.#quantities.get(id);
+        const quantity = this.validatedQuantities().get(id);
         if (quantity === undefined)
             throw new Error("Invalid payment item");
         if (!skipStockValidation && Number(product.stock ?? 0) < quantity)

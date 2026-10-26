@@ -35,6 +35,7 @@ const { DynamoNotifiedOrders } = await import("../dist/src/modules/notifications
 const { CompleteNotifiedOrder } = await import("../dist/src/modules/notifications/application/complete-notified-order.js");
 const { DynamoPaymentRecovery } = await import("../dist/src/modules/vnpay/infrastructure/dynamo-payment-recovery.js");
 const { DynamoProfiles } = await import("../dist/src/modules/customers/authorization/infrastructure/profile-adapters.js");
+const { Product } = await import("../dist/src/modules/shopping/domain/product.js");
 let created = false;
 const email = "integration@example.test", actor = { subject: "integration-owner", isAdmin: false };
 const read = async (PK, SK = "DETAIL") => {
@@ -90,6 +91,24 @@ test("engine: optimistic product writes allow one version winner and enforce own
   await assert.rejects(repository.update({ id, changes: { name: "Wrong owner" }, expectedVersion: 2,
     expectedOwnerId: "foreign", status: "active" }), { code: "CONFLICT" });
   assert.equal((await read(`PRODUCT#${id}`)).version, 2);
+});
+
+test("engine: passive hydration cannot bypass assertions at product write boundaries", async () => {
+  const id = await seedProduct();
+  const row = await read(`PRODUCT#${id}`);
+  await put({ ...row, soldCount: -1 });
+  const repository = new DynamoProductWriteRepository();
+  const entity = await repository.findById(id);
+  assert.ok(entity instanceof Product);
+  assert.equal(entity.soldCount, -1);
+  const flow = new UpdateProduct(repository, { async publish() { throw new Error("Must not publish"); } });
+  await assert.rejects(flow.execute({ productId: id, actor, expectedVersion: 1, changes: { stock: 5 } }), { code: "INVALID_INPUT" });
+  const unchanged = await read(`PRODUCT#${id}`);
+  assert.equal(unchanged.version, 1); assert.equal(unchanged.stock, row.stock);
+  const uncreatedId = randomUUID();
+  const invalid = new Product({ ...entity.toSnapshot(), id: uncreatedId });
+  await assert.rejects(new DynamoProductCreator().create({ product: invalid, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }), { code: "INVALID_INPUT" });
+  assert.equal(await read(`PRODUCT#${uncreatedId}`), null);
 });
 
 test("engine: competing checkouts cannot oversell; replay does not deduct stock twice; cancel releases once", async () => {
