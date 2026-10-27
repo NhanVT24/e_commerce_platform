@@ -3,6 +3,8 @@ import { test } from "node:test";
 import { Product, type ProductSnapshot } from "../src/modules/shopping/domain/product.js";
 import { ProductMutationError } from "../src/modules/shopping/domain/product.error.js";
 import { Order } from "../src/modules/storefront/domain/order.js";
+import { PaymentReview, type PaymentReviewDetails } from "../src/modules/storefront/domain/payment-review.js";
+import { InventoryAlertDelivery } from "../src/modules/shopping/domain/inventory-alert-delivery.js";
 import { OrderItems } from "../src/modules/storefront/domain/order-items.js";
 import { Payment } from "../src/modules/vnpay/domain/payment-session.js";
 import { PaymentDraft } from "../src/modules/vnpay/domain/payment-draft.js";
@@ -19,9 +21,143 @@ import { RevenueReport } from "../src/modules/storefront/domain/revenue-report.j
 import { UploadScope } from "../src/modules/uploads/domain/upload-scope.js";
 import { SignUpEmail } from "../src/modules/customers/authorization/domain/sign-up-email.js";
 import { CreatePayment } from "../src/modules/vnpay/application/create-payment.js";
+import { InventoryReport, InventoryReportDelivery } from "../src/modules/inventory-reports/domain/inventory-report.js";
 
 const snapshot: ProductSnapshot = { id: "product", ownerId: "owner", name: "Product", stock: 20, status: "active", version: 3, soldCount: 2 };
 const now = Date.parse("2026-10-22T00:00:00Z");
+
+test("EmailDelivery factory owns normalization, identities and immutable pending batch state", () => {
+  let sequence = 0;
+  const input = { emailType: "sale_campaign" as const, senderEmail: "sender@test.com", subject: "Sale",
+    recipients: [{ email: " A@Test.com ", type: "cc" as const }], html: "private", text: "private" };
+  const delivery = EmailDelivery.create(input, () => `id-${++sequence}`, now);
+  input.recipients[0].email = "other@test.com";
+  const snapshot = delivery.toSnapshot();
+  assert.equal(snapshot.meta.recipientCount, 1);
+  assert.equal(snapshot.meta.sendStatus, "pending");
+  assert.equal(snapshot.recipients[0].recipientEmail, "a@test.com");
+  assert.equal(snapshot.recipients[0].status, "pending");
+  snapshot.recipients[0].recipientEmail = "mutated@test.com";
+  assert.equal(delivery.toSnapshot().recipients[0].recipientEmail, "a@test.com");
+  const single = EmailDelivery.createSingle({ emailType: "account_welcome", senderEmail: "sender@test.com", subject: "Welcome", recipientEmail: "a@test.com" }, () => "stable", now).toSnapshot();
+  assert.equal(single.meta.id, single.recipients[0].recipientId);
+  assert.throws(() => EmailDelivery.create({ ...input, recipients: [{ email: "A@test.com" }, { email: "a@test.com" }] }, () => "id", now), /only once/);
+  assert.throws(() => EmailDelivery.create({ ...input, recipients: [] }, () => "id", now), /1 to 50/);
+});
+
+test("EmailRoute and report factories compute initial state and isolate caller payloads", () => {
+  const event = { source: "email", detailType: "requested", detail: { recipients: ["a@test.com"] } };
+  const route = EmailRoute.create({ emailJobId: "job", campaignId: "campaign", batchIndex: 0, batchCount: 1, event }, now);
+  event.detail.recipients.push("outside@test.com");
+  assert.equal(route.toSnapshot().status, "PUBLISHING");
+  assert.equal(route.toSnapshot().publishAttempts, 1);
+  assert.deepEqual(route.toSnapshot().eventDetail.recipients, ["a@test.com"]);
+  assert.throws(() => EmailRoute.create({ emailJobId: "job", campaignId: "campaign", batchIndex: 1, batchCount: 1, event }, now), { code: "INVALID_INPUT" });
+  const report = InventoryReportDelivery.create(new InventoryReport(new Date(now)), "admin@test.com", 2, 3, now).toSnapshot();
+  assert.equal(report.productCount, 5);
+  assert.equal(report.status, "pending");
+  assert.throws(() => InventoryReportDelivery.create(new InventoryReport(new Date(now)), "admin@test.com", -1, 3, now), { code: "INVALID_INPUT" });
+});
+
+test("Payment factory and confirmation own normalization and reject mismatched callbacks", () => {
+  const pending = Payment.create({ txnRef: "payment", email: " OWNER@Test.com ", amount: 1000, orderInfo: "Order",
+    expiresAt: new Date(now + 300000).toISOString(), transactionDate: "20261022070000" }, now);
+  const callback = { txnRef: "payment", amountMinor: "100000", transactionStatus: "success" as const,
+    responseCode: "00", transactionNo: "provider", gatewayTransactionStatus: "00", bankCode: "", payDate: "" };
+  const confirmed = pending.confirmedBy(callback);
+  assert.equal(confirmed.toSnapshot().email, "owner@test.com");
+  assert.equal(confirmed.isFinal, true);
+  assert.equal(pending.isPending, true);
+  assert.throws(() => pending.confirmedBy({ ...callback, txnRef: "foreign" }), /does not match/);
+  assert.throws(() => pending.confirmedBy({ ...callback, amountMinor: "999" }), /does not match/);
+});
+
+test("Order.create owns new checkout state, merged lines, backend prices and hold deadline", () => {
+  const input = { id: "order", customerEmail: "owner@test.com", now, holdSeconds: 300,
+    items: [{ productId: "PRODUCT#one", quantity: 2 }, { productId: "one", quantity: 3 }],
+    products: [{ productId: "one", productName: "One", unitPrice: 1000, originalUnitPrice: 1200 }] };
+  const order = Order.create(input);
+  input.products[0].unitPrice = 1; input.items[0].quantity = 50;
+  const snapshot = order.toSnapshot();
+  assert.equal(snapshot.status, "awaiting_payment");
+  assert.equal(snapshot.totalAmount, 5000);
+  assert.equal(snapshot.itemCount, 1);
+  assert.equal(snapshot.createdAt, new Date(now).toISOString());
+  assert.equal(snapshot.lockedUntil, new Date(now + 300000).toISOString());
+  assert.deepEqual(snapshot.items, [{ productId: "one", productName: "One", unitPrice: 1000,
+    originalUnitPrice: 1200, quantity: 5, lineTotal: 5000 }]);
+  Reflect.set(snapshot.items[0], "unitPrice", 0);
+  assert.equal(order.toSnapshot().items[0].unitPrice, 1000);
+  const restored = new Order(order.toSnapshot());
+  assert.equal(restored.matchesPayment({ email: input.customerEmail, amount: 5000, txnRef: "absent" }), false);
+});
+
+test("Order.create rejects invalid identity, cart, pricing and hold before persistence", () => {
+  const input = { id: "order", customerEmail: "owner@test.com", now, holdSeconds: 300,
+    items: [{ productId: "one", quantity: 1 }], products: [{ productId: "one", productName: "One", unitPrice: 1000 }] };
+  for (const patch of [{ id: " " }, { customerEmail: "" }, { now: NaN }, { holdSeconds: 0 }, { holdSeconds: 1.5 },
+    { items: [] }, { products: [] }, { products: [...input.products, ...input.products] }]) {
+    assert.throws(() => Order.create({ ...input, ...patch }), { code: "INVALID_INPUT" });
+  }
+  for (const unitPrice of [-1, 0, NaN, Infinity, Number.MAX_SAFE_INTEGER]) {
+    assert.throws(() => Order.create({ ...input, items: [{ productId: "one", quantity: 2 }],
+      products: [{ ...input.products[0], unitPrice }] }), { code: "INVALID_INPUT" });
+  }
+  assert.throws(() => Order.create({ ...input, products: [{ ...input.products[0], originalUnitPrice: NaN }] }), { code: "INVALID_INPUT" });
+});
+
+test("PaymentReview only reopens uncertainty for stronger evidence of the same payment", () => {
+  const input: PaymentReviewDetails = { txnRef: "payment", orderId: "order", amount: 1000, reason: "PROVIDER_UNCONFIRMED" };
+  const review = new PaymentReview(input);
+  input.amount = 2000;
+  const incoming = { ...review.toSnapshot(), reason: "PAID_AFTER_RELEASE" as const };
+  assert.equal(review.shouldReopenFor(incoming), true);
+  assert.equal(review.shouldReopenFor(review.toSnapshot()), false);
+  const output = review.toSnapshot(); output.reason = "CORRELATION_MISMATCH";
+  assert.equal(review.toSnapshot().reason, "PROVIDER_UNCONFIRMED");
+  for (const reason of ["PAID_AFTER_RELEASE", "CORRELATION_MISMATCH"] as const) {
+    assert.equal(new PaymentReview({ ...incoming, reason }).shouldReopenFor({ ...incoming, reason: "PROVIDER_UNCONFIRMED" }), false);
+  }
+  for (const patch of [{ txnRef: "other" }, { orderId: "other" }, { amount: 2000 }]) {
+    assert.throws(() => review.shouldReopenFor({ ...incoming, ...patch }), /identity conflict/);
+  }
+});
+
+test("InventoryAlertDelivery bounds retries and preserves event identity across rehydration", () => {
+  const input = { eventId: "alert:product:2", attempts: 1 };
+  const delivery = new InventoryAlertDelivery(input); input.attempts = 8;
+  assert.equal(delivery.exhausted(8), false);
+  assert.equal(delivery.nextRetryAt(now), new Date(now + 10000).toISOString());
+  assert.equal(new InventoryAlertDelivery({ ...input, attempts: 2 }).nextRetryAt(now), new Date(now + 20000).toISOString());
+  assert.equal(new InventoryAlertDelivery(input).exhausted(8), true);
+  assert.equal(new InventoryAlertDelivery({ ...input, attempts: 100 }).nextRetryAt(now), new Date(now + 900000).toISOString());
+  const snapshot = delivery.toSnapshot(); snapshot.eventId = "other";
+  assert.equal(new InventoryAlertDelivery(delivery.toSnapshot()).toSnapshot().eventId, "alert:product:2");
+  for (const attempts of [-1, 1.5, NaN, Infinity]) {
+    assert.throws(() => new InventoryAlertDelivery({ ...input, attempts }).exhausted(8), { code: "INVALID_INPUT" });
+  }
+  assert.throws(() => delivery.exhausted(0), { code: "INVALID_INPUT" });
+  assert.throws(() => delivery.nextRetryAt(NaN), { code: "INVALID_INPUT" });
+});
+
+test("Order checkout replay requires identical owner/items, usable linkage and an unexpired hold", () => {
+  const snapshot = { id: "order", customerEmail: "owner@test.com", status: "awaiting_payment",
+    lockedUntil: new Date(now + 300000).toISOString() };
+  const lines = [{ productId: "one", quantity: 2 }, { productId: "two", quantity: 1 }];
+  const order = new Order(snapshot);
+  const time = new Date(now).toISOString();
+  order.assertCheckoutReplay(snapshot.customerEmail, lines, [...lines].reverse(), time);
+  new Order({ ...snapshot, paymentTxnRef: "payment", paymentUrl: "https://payment.test" })
+    .assertCheckoutReplay(snapshot.customerEmail, lines, lines, time);
+  assert.throws(() => order.assertCheckoutReplay("other@test.com", lines, lines, time), { code: "CONFLICT" });
+  assert.throws(() => order.assertCheckoutReplay(snapshot.customerEmail, [{ productId: "one", quantity: 3 }], lines, time), { code: "CONFLICT" });
+  for (const patch of [{ paymentTxnRef: "payment" }, { paymentUrl: "https://payment.test" }, { status: "paid" }, { lockedUntil: time }]) {
+    assert.throws(() => new Order({ ...snapshot, ...patch }).assertCheckoutReplay(snapshot.customerEmail, lines, lines, time), { code: "CONFLICT" });
+  }
+  assert.equal(order.isCheckoutExpiredAt(snapshot.lockedUntil), true);
+  assert.equal(new Order({ ...snapshot, status: "paid" }).isCheckoutExpiredAt(snapshot.lockedUntil), false);
+  assert.equal(order.toSnapshot().status, "awaiting_payment");
+});
 
 test("Product rehydration creates real methods; snapshots do not share mutable entity state", () => {
   const input = { ...snapshot };
