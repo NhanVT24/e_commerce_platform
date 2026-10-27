@@ -11,7 +11,7 @@ import { normalizeText, toProductRecord } from "./product.mapper.js";
 import { toDynamoItem, rethrowProductConflict } from "./product-record.store.js";
 const TableName = databaseConfig.DYNAMODB_TABLE_NAME;
 
-export async function createProductRecord(input: ProductRecord, ownerSub: string, identity?: { id: string; createdAt: string; updatedAt: string; status: ProductStatus }) {
+async function createProductRecord(input: ProductRecord, ownerSub: string, identity?: { id: string; createdAt: string; updatedAt: string; status: ProductStatus }) {
   const now = new Date().toISOString();
   const item = toProductRecord(
     {

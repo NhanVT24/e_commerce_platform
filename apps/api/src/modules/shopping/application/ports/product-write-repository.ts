@@ -1,5 +1,5 @@
 import type { InventoryStockAlert } from "./inventory-alert-publisher.js";
-import type { Product, ProductChanges, ProductStatus } from "../../domain/product.js";
+import type { Product, ProductChanges } from "../../domain/product.js";
 
 /**
  * TResult is an opaque compatibility representation owned by the outer adapter.
@@ -15,9 +15,8 @@ export interface ProductWriteRepository<TResult> {
    * Infrastructure failures must propagate, never be classified as conflicts.
    */
   update(input: {
-    id: string;
-    changes: ProductChanges;
-    status: ProductStatus;
+    product: Product;
+    fields: readonly (keyof ProductChanges)[];
     expectedVersion: number;
     expectedOwnerId?: string;
     /** When present, commit this event in the SAME transaction as the mutation. */

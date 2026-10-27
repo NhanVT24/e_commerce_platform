@@ -1,4 +1,4 @@
-import { Product } from "../../domain/product.js";
+import { Product, productEditableFields } from "../../domain/product.js";
 import { deriveStockStatus as deriveStatus } from "../../domain/stock-policy.js";
 import type { ProductRecord } from "../../product.types.js";
 type ProductInput = ProductRecord;
@@ -29,6 +29,7 @@ export function toProductRecord(input: ProductInput, current: ProductRecord | nu
 
 export function toProduct(record: ProductRecord): Product {
   return new Product({
+    ...Object.fromEntries(productEditableFields.filter(field => record[field] !== undefined).map(field => [field, record[field]])),
     id: String(record.id ?? ""), ownerId: String(record.ownerSub ?? ""),
     name: String(record.name ?? ""), sku: record.sku ? String(record.sku) : undefined,
     stock: Number(record.stock ?? 0), status: String(record.status ?? ""),

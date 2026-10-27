@@ -12,7 +12,7 @@ import { toProductRecord, toProduct } from "./product.mapper.js";
 import { readProductRecord, toDynamoItem, rethrowProductConflict, missingProductConflict } from "./product-record.store.js";
 const TableName = databaseConfig.DYNAMODB_TABLE_NAME;
 
-export async function incrementProductRecord(id: string, field: string, incrementBy = 1, expectedOwnerSub?: string, prepared?: { expectedVersion: number; nextValue: number; status: ProductStatus; inventoryAlert?: InventoryStockAlert; changedBy?: string }) {
+async function incrementProductRecord(id: string, field: string, incrementBy = 1, expectedOwnerSub?: string, prepared?: { expectedVersion: number; nextValue: number; status: ProductStatus; inventoryAlert?: InventoryStockAlert; changedBy?: string }) {
   if (field !== "stock" && field !== "soldCount") {
     throw new Error(`Field "${field}" is not allowed for increment.`);
   }
@@ -109,7 +109,10 @@ export class DynamoProductCounterRepository implements ProductCounterRepository<
   }
   async increment(input: Parameters<ProductCounterRepository<ProductRecord>["increment"]>[0]) {
     try {
-      const record = await incrementProductRecord(input.id, input.field, input.incrementBy, input.expectedOwnerId, input);
+      input.product.assertValidState();
+      input.product.assertVersion(input.expectedVersion);
+      const record = await incrementProductRecord(input.product.id, input.field, input.incrementBy, input.expectedOwnerId,
+        { ...input, nextValue: input.product[input.field], status: input.product.stockStatus });
       return { product: toProduct(record), representation: record };
     } catch (error) { rethrowProductConflict(error, [0]); }
   }
