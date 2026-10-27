@@ -35,13 +35,18 @@ export class UserProfile {
  */
 export class ProfileChange {
     readonly #changes: Readonly<UserProfilePatch>;
-    constructor(private readonly subject: string, patch: UserProfilePatch) {
+    constructor(readonly subject: string, patch: UserProfilePatch) {
         this.#changes = Object.freeze({ ...patch, ...(patch.addresses === undefined ? {} : {
                 addresses: patch.addresses.map(address => ({ ...address, ward: { ...address.ward } }))
             }) });
     }
     assertAllowed(): void {
         if (this.avatarKey !== undefined) UserProfile.assertAvatarKey(this.subject, this.avatarKey);
+        if (this.#changes.addresses?.some(address => !address.city.trim() || !address.province.trim() || !address.ward.name.trim() ||
+            address.city.length > 120 || address.province.length > 120 || address.ward.name.length > 120 ||
+            address.ward.houseNumber.length > 40 || address.ward.streetNumber.length > 120)) {
+            throw new BusinessError("INVALID_INPUT", "Invalid user address.");
+        }
     }
     get avatarKey() { return this.#changes.avatarKey; }
     toSnapshot(): UserProfilePatch {

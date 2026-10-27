@@ -5,19 +5,18 @@ export interface CampaignStore {
     listSaleCampaigns(): Promise<SaleCampaign[]>;
     listActiveSaleCampaigns(): Promise<SaleCampaign[]>;
     getSaleCampaign(id: string): Promise<SaleCampaign | null>;
-    createSaleCampaign(input: Omit<SaleCampaign, "version" | "createdAt" | "updatedAt">): Promise<SaleCampaign>;
-    cancelSaleCampaign(id: string): Promise<void>;
-    transitionSaleCampaign(id: string, from: SaleCampaignStatus, to: SaleCampaignStatus): Promise<void>;
+    createSaleCampaign(campaign: Campaign): Promise<SaleCampaign>;
+    cancelSaleCampaign(campaign: Campaign): Promise<void>;
+    transitionSaleCampaign(campaign: Campaign, from: SaleCampaignStatus): Promise<void>;
     closeSaleCampaignBecauseEmpty(input: {
-        id: string;
+        campaign: Campaign;
         expectedStatus: "scheduled" | "active";
         expectedVersion: number;
     }): Promise<SaleCampaign | null>;
     updateSaleCampaignProducts(input: {
-        id: string;
+        campaign: Campaign;
         expectedStatus: "scheduled" | "active";
         expectedVersion: number;
-        productIds: string[];
     }): Promise<SaleCampaign | null>;
 }
 export interface CampaignProducts<TProduct> {
@@ -53,7 +52,8 @@ export class SalesUseCases<TProduct> {
         const id = this.newId();
         const startName = scheduleName(id, "start");
         const endName = scheduleName(id, "end");
-        const campaign = await this.campaigns.createSaleCampaign({ id, name: input.name, discountPercent: input.discountPercent, startAt: input.startAt, endAt: input.endAt, productIds: input.productIds ?? [], campaignStatus: "scheduled", startScheduleName: startName, endScheduleName: endName });
+        const entity = Campaign.create(id, input, this.now());
+        const campaign = await this.campaigns.createSaleCampaign(entity);
         try {
             const scheduled = await Promise.allSettled([this.schedules.create(campaign.id, "start", input.startAt, startName), this.schedules.create(campaign.id, "end", input.endAt, endName)]);
             const rejected = scheduled.find((result): result is PromiseRejectedResult => result.status === "rejected");
@@ -63,7 +63,7 @@ export class SalesUseCases<TProduct> {
         catch (error) {
             // Compensate for a partial Scheduler failure so a campaign cannot become active unexpectedly.
             await Promise.allSettled([this.schedules.delete(startName), this.schedules.delete(endName)]);
-            await this.campaigns.cancelSaleCampaign(campaign.id).catch(() => undefined);
+            await this.campaigns.cancelSaleCampaign(entity.cancel()).catch(() => undefined);
             throw error;
         }
         return campaign;
@@ -72,8 +72,9 @@ export class SalesUseCases<TProduct> {
         const campaign = await this.campaigns.getSaleCampaign(id);
         if (!campaign)
             throw new ApplicationError("NOT_FOUND", "Sale campaign not found.");
+        const cancelled = new Campaign(campaign).cancel();
         await Promise.allSettled([this.schedules.delete(campaign.startScheduleName), this.schedules.delete(campaign.endScheduleName)]);
-        await this.campaigns.cancelSaleCampaign(id);
+        await this.campaigns.cancelSaleCampaign(cancelled);
         return { success: true };
     }
     async removeProduct(id: string, productId: string) {
@@ -82,12 +83,13 @@ export class SalesUseCases<TProduct> {
             if (!campaign)
                 throw new ApplicationError("NOT_FOUND", "Sale campaign not found.");
             const change = new Campaign(campaign).removeProduct(productId);
+            const next = new Campaign(campaign).withoutProduct(productId);
             if (change.alreadyAbsent) return { campaign, closed: change.closed };
             const remainingProductIds = change.productIds;
             try {
                 if (remainingProductIds.length === 0) {
                     const closedCampaign = await this.campaigns.closeSaleCampaignBecauseEmpty({
-                        id: campaign.id,
+                        campaign: next,
                         expectedStatus: change.expectedStatus,
                         expectedVersion: campaign.version
                     });
@@ -96,10 +98,9 @@ export class SalesUseCases<TProduct> {
                     return { campaign: closedCampaign!, closed: true };
                 }
                 const updatedCampaign = await this.campaigns.updateSaleCampaignProducts({
-                    id: campaign.id,
+                    campaign: next,
                     expectedStatus: change.expectedStatus,
                     expectedVersion: campaign.version,
-                    productIds: remainingProductIds
                 });
                 return { campaign: updatedCampaign!, closed: false };
             }
@@ -117,9 +118,11 @@ export class SalesUseCases<TProduct> {
         const campaign = await this.campaigns.getSaleCampaign(String(input.campaignId ?? ""));
         if (!campaign)
             return { ignored: "campaign_not_found" };
-        const transition = new Campaign(campaign).scheduledTransition(input.action, this.now());
+        const checkedAt = this.now();
+        const transition = new Campaign(campaign).scheduledTransition(input.action, checkedAt);
         if (!transition) return { ignored: "unknown_action" };
-        await this.campaigns.transitionSaleCampaign(campaign.id, transition.from, transition.to).catch(ignoreConflict);
+        const next = new Campaign(campaign).afterScheduledEvent(input.action, checkedAt)!;
+        await this.campaigns.transitionSaleCampaign(next, transition.from).catch(ignoreConflict);
         return transition.to === "active" ? { active: true } : { ended: true };
     }
     async getActiveCampaigns() { return this.campaigns.listActiveSaleCampaigns(); }
