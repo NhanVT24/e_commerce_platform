@@ -28,8 +28,8 @@ async function conditional<T>(run: () => Promise<T>): Promise<T> {
 export const campaignStore: CampaignStore = {
     listSaleCampaigns: repository.listSaleCampaigns, listActiveSaleCampaigns: repository.listActiveSaleCampaigns,
     getSaleCampaign: repository.getSaleCampaign, createSaleCampaign: repository.createSaleCampaign,
-    cancelSaleCampaign: id => conditional(() => repository.cancelSaleCampaign(id)),
-    transitionSaleCampaign: (id, from, to) => conditional(() => repository.transitionSaleCampaign(id, from, to)),
+    cancelSaleCampaign: campaign => conditional(() => repository.cancelSaleCampaign(campaign)),
+    transitionSaleCampaign: (campaign, from) => conditional(() => repository.transitionSaleCampaign(campaign, from)),
     closeSaleCampaignBecauseEmpty: input => conditional(() => repository.closeSaleCampaignBecauseEmpty(input)),
     updateSaleCampaignProducts: input => conditional(() => repository.updateSaleCampaignProducts(input))
 };

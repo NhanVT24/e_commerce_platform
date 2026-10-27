@@ -7,7 +7,7 @@ export class CancelOrder {
   async execute(email: string, orderId: string) {
     const order = await this.orders.findById(orderId);
     assertOwnedOrder(order, email);
-    const outcome = await this.orders.cancel(orderId, email);
+    const outcome = await this.orders.cancel(order);
     return { success: true, orderId, status: outcome.order.status, released: outcome.changed };
   }
 }

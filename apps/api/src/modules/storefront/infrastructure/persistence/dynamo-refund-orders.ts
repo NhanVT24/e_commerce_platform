@@ -6,7 +6,7 @@ import { rawDb } from "../../../../database/dynamodb/client.js";
 import { inventoryTransaction } from "../../../shopping/infrastructure/persistence/inventory-transaction.js";
 import { readProductRecord } from "../../../shopping/infrastructure/persistence/product-record.store.js";
 import type { StorefrontAwaitingPaymentOrderRecord } from "../../storefront.repository.js";
-import type { RefundOrder } from "../../domain/order-refund.js";
+import { toCheckoutOrder } from "./order.mapper.js";
 import { REFUND_WINDOW_MS, isTerminalRefund } from "../../domain/order-refund.js";
 import { OrderActionError } from "../../application/order-action.error.js";
 import type { RefundOrderRepository } from "../../application/ports/order-lifecycle-ports.js";
@@ -14,13 +14,6 @@ import { getAwaitingPaymentOrder, listOrderItems } from "./order-record.store.js
 const TableName = databaseConfig.DYNAMODB_TABLE_NAME;
 const toDynamoItem = (item: Record<string, unknown>) => marshall(item, { removeUndefinedValues: true });
 const buildOrderMetaKey = (orderId: string) => ({ PK: 'ORDER#' + orderId, SK: 'ORDER' });
-
-export function toRefundOrder(record: StorefrontAwaitingPaymentOrderRecord): RefundOrder {
-  return { id: record.PK.replace(/^ORDER#/, ''), customerEmail: record.customerEmail,
-    status: record.status, totalAmount: record.totalAmount, paymentTxnRef: record.paymentTxnRef,
-    paymentConfirmedAt: record.paymentConfirmedAt, refundRequestId: record.refundRequestId,
-    refundStatus: record.refundStatus, refundTransactionNo: record.refundTransactionNo };
-}
 
 function conditionalOrderFailure(error: unknown): boolean {
   const failure = error as { name?: string; CancellationReasons?: Array<{ Code?: string }> };
@@ -98,29 +91,36 @@ async function persistRefundOutcome(input: { orderId: string; requestId: string;
 export class DynamoRefundOrders implements RefundOrderRepository {
   async findById(id: string) {
     const record = await getAwaitingPaymentOrder(id);
-    return record ? toRefundOrder(record) : null;
+    return record ? toCheckoutOrder(record, await listOrderItems(id)) : null;
   }
-  async listPending(limit: number) { return (await listPendingRefundRecords(limit)).map(toRefundOrder); }
+  async listPending(limit: number) { return (await listPendingRefundRecords(limit)).map(record => toCheckoutOrder(record)); }
   async claim(input: Parameters<RefundOrderRepository['claim']>[0]): Promise<void> {
-    try { await beginRefund(input.orderId, input.paymentConfirmedAt, input.requestId, input.customerEmail, input.now); }
+    const order = input.order;
+    if (order.status !== "refund_pending" || !order.refundRequestId || !order.paymentConfirmedAt) {
+      throw new OrderActionError('CONFLICT', 'No pending refund request.');
+    }
+    try { await beginRefund(order.id, order.paymentConfirmedAt, order.refundRequestId, order.customerEmail, input.now); }
     catch (error) {
       if (conditionalOrderFailure(error)) throw new OrderActionError('CONFLICT', 'Refund already requested or order changed.');
       throw error;
     }
   }
-  async saveOutcome(input: Parameters<RefundOrderRepository['saveOutcome']>[0]) {
-    const before = await this.findById(input.orderId);
-    if (!before || before.refundRequestId !== input.requestId) throw new OrderActionError('CONFLICT', 'Refund request changed.');
+  async saveOutcome(entity: Parameters<RefundOrderRepository['saveOutcome']>[0]) {
+    const order = entity;
+    if (!order.refundRequestId || (order.status !== "refund_pending" && order.status !== "refund_sent" && order.status !== "refund_rejected")) {
+      throw new OrderActionError('CONFLICT', 'No refund outcome for this order.');
+    }
+    const before = await this.findById(order.id);
+    if (!before || before.refundRequestId !== order.refundRequestId) throw new OrderActionError('CONFLICT', 'Refund request changed.');
     if (isTerminalRefund(before.status)) return { order: before, changed: false };
     try {
-      await persistRefundOutcome({ orderId: input.orderId, requestId: input.requestId,
-        status: input.outcome.status, gatewayStatus: input.outcome.gatewayStatus, transactionNo: input.outcome.transactionNo });
-      return { order: { ...before, status: input.outcome.status, refundStatus: input.outcome.gatewayStatus,
-        refundTransactionNo: input.outcome.transactionNo || before.refundTransactionNo }, changed: true };
+      await persistRefundOutcome({ orderId: order.id, requestId: order.refundRequestId,
+        status: order.status, gatewayStatus: order.refundStatus ?? "", transactionNo: order.refundTransactionNo });
+      return { order, changed: true };
     } catch (error) {
       if (conditionalOrderFailure(error)) {
-        const winner = await this.findById(input.orderId);
-        if (winner?.refundRequestId === input.requestId && isTerminalRefund(winner.status)) return { order: winner, changed: false };
+        const winner = await this.findById(order.id);
+        if (winner?.refundRequestId === order.refundRequestId && isTerminalRefund(winner.status)) return { order: winner, changed: false };
         throw new OrderActionError('CONFLICT', 'Refund request changed.');
       }
       throw error;

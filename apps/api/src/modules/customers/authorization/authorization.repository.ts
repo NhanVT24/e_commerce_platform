@@ -1,4 +1,6 @@
 import { normalizeAddresses, type UserAddress } from "./user-address.js";
+import type { UserAccount, UserPermissionChange } from "./domain/user-account.js";
+import type { ProfileChange } from "./domain/user-profile.js";
 export type { UserAddress } from "./user-address.js";
 import { GetItemCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
@@ -64,7 +66,8 @@ export async function getUserProfileSummary(subject: string): Promise<{ accountS
   };
 }
 
-export async function updateUserAccountStatus(subject: string, status: UserAccountStatus, updatedBy: string) {
+export async function updateUserAccountStatus(account: UserAccount, updatedBy: string) {
+  const subject = account.subject, status = account.status;
   const now = new Date().toISOString();
   await rawDb.send(new UpdateItemCommand({
     TableName,
@@ -90,7 +93,9 @@ export async function updateUserAccountStatus(subject: string, status: UserAccou
   return getUserAccountStatus(subject);
 }
 
-export async function updateUserAddresses(subject: string, addresses: UserAddress[], updatedBy: string) {
+export async function updateUserAddresses(change: ProfileChange, updatedBy: string) {
+  change.assertAllowed();
+  const subject = change.subject, addresses = change.toSnapshot().addresses ?? [];
   const now = new Date().toISOString();
   await rawDb.send(new UpdateItemCommand({
     TableName,
@@ -115,7 +120,8 @@ export async function updateUserAddresses(subject: string, addresses: UserAddres
   return normalizeAddresses(addresses);
 }
 
-export async function addUserPermission(subject: string, permission: ProductPermission, updatedBy: string) {
+export async function addUserPermission(change: UserPermissionChange) {
+  const { subject, permission, actor: updatedBy } = change;
   const now = new Date().toISOString();
   const key = keys.userAuthorization(subject);
   await rawDb.send(new UpdateItemCommand({
@@ -142,7 +148,8 @@ export async function addUserPermission(subject: string, permission: ProductPerm
   return getUserPermissions(subject);
 }
 
-export async function removeUserPermission(subject: string, permission: ProductPermission, updatedBy: string) {
+export async function removeUserPermission(change: UserPermissionChange) {
+  const { subject, permission, actor: updatedBy } = change;
   const now = new Date().toISOString();
   const key = keys.userAuthorization(subject);
   await rawDb.send(new UpdateItemCommand({

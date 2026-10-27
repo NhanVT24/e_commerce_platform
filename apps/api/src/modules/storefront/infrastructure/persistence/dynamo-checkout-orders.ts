@@ -2,43 +2,38 @@ import { QueryCommand, type AttributeValue } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { rawDb } from "../../../../database/dynamodb/client.js";
 import { databaseConfig } from "../../../../config/database-config.js";
-import type { CheckoutOrders, HeldOrder } from "../../application/ports/checkout-ports.js";
-import { createAwaitingPaymentOrder, attachPaymentTxnRef, transitionAwaitingPaymentOrder } from "./storefront.store.js";
+import type { CheckoutOrders } from "../../application/ports/checkout-ports.js";
+import { persistAwaitingPaymentOrder, readCheckoutPrices, attachPaymentTxnRef, transitionAwaitingPaymentOrder } from "./storefront.store.js";
 import { getAwaitingPaymentOrder } from "./order-record.store.js";
 import { listOrderItems } from "./order-record.store.js";
 import { OrderActionError } from "../../application/order-action.error.js";
 import { InsufficientOrderStock } from "../../application/ports/order-finalization-ports.js";
 import { getPaymentSessionByTxnRef } from "../../../vnpay/vnpay.repository.js";
-
-const toOrder = (order: Awaited<ReturnType<typeof getAwaitingPaymentOrder>>): HeldOrder => ({
-  id: order.PK.replace(/^ORDER#/, ""), customerEmail: order.customerEmail, status: order.status,
-  totalAmount: order.totalAmount, lockedUntil: order.lockedUntil, paymentTxnRef: order.paymentTxnRef, paymentUrl: order.paymentUrl,
-  paymentConfirmedAt: order.paymentConfirmedAt });
+import { toCheckoutOrder } from "./order.mapper.js";
 
 export class DynamoCheckoutOrders implements CheckoutOrders {
-  async hold(input: Parameters<CheckoutOrders["hold"]>[0]) {
+  loadPrices = readCheckoutPrices;
+  async create(entity: Parameters<CheckoutOrders["create"]>[0]) {
+    const orderData = entity;
     // Session+link are now committed atomically. Unattached holds can be resumed
     // safely; concurrent issuers compete on the order condition in that transaction.
     const replay = async () => {
-      const existing = await getAwaitingPaymentOrder(input.orderId);
+      const existing = await getAwaitingPaymentOrder(orderData.id);
       if (!existing) return null;
-      const lines = await listOrderItems(input.orderId);
-      const same = existing.customerEmail === input.email && lines.length === input.items.length &&
-        input.items.every(item => lines.some(line => line.productId === item.productId && line.quantity === item.quantity));
-      if (!same || existing.status !== "awaiting_payment" || Boolean(existing.paymentUrl) !== Boolean(existing.paymentTxnRef) ||
-        existing.lockedUntil <= new Date().toISOString()) {
-        throw new OrderActionError("CONFLICT", "Checkout ID already exists, is being prepared, or has expired.");
-      }
-      return { order: toOrder(existing), items: lines };
+      const lines = await listOrderItems(orderData.id);
+      const order = toCheckoutOrder(existing, lines);
+      order.assertCheckoutReplay(orderData.customerEmail, orderData.items, lines, new Date().toISOString());
+      return order;
     };
     const existing = await replay();
     if (existing) return existing;
     try {
-      const result = await createAwaitingPaymentOrder(input);
-      return { order: toOrder(result.order), items: result.items };
+      const result = await persistAwaitingPaymentOrder(entity);
+      return toCheckoutOrder(result.order, result.items);
     } catch (error) {
       const failure = error as { name?: string; CancellationReasons?: Array<{ Code?: string }> };
-      if (failure?.name === "TransactionCanceledException" && failure.CancellationReasons?.[0]?.Code === "ConditionalCheckFailed") {
+      if ((error instanceof OrderActionError && error.code === "CONFLICT") ||
+          (failure?.name === "TransactionCanceledException" && failure.CancellationReasons?.[0]?.Code === "ConditionalCheckFailed")) {
         const winner = await replay();
         if (winner) return winner;
       }
@@ -50,12 +45,21 @@ export class DynamoCheckoutOrders implements CheckoutOrders {
       throw error;
     }
   }
-  async findById(id: string) { const order = await getAwaitingPaymentOrder(id); return order ? toOrder(order) : null; }
-  async attachPayment(orderId: string, txnRef: string, email: string, paymentUrl: string) { await attachPaymentTxnRef(orderId, txnRef, email, paymentUrl); }
-  async transition(input: Parameters<CheckoutOrders["transition"]>[0]) {
+  async findById(id: string) {
+    const record = await getAwaitingPaymentOrder(id);
+    return record ? toCheckoutOrder(record, await listOrderItems(id)) : null;
+  }
+  async attachPayment(entity: Parameters<CheckoutOrders["attachPayment"]>[0]) {
+    const order = entity;
+    if (!order.paymentTxnRef || !order.paymentUrl) throw new OrderActionError("INVALID_INPUT", "Order has no payment linkage.");
+    await attachPaymentTxnRef(order.id, order.paymentTxnRef, order.customerEmail, order.paymentUrl);
+  }
+  async transition(change: Parameters<CheckoutOrders["transition"]>[0]) {
+    const { order: entity, ...context } = change;
+    const input = { ...context, orderId: entity.id };
     try {
       const result = await transitionAwaitingPaymentOrder(input);
-      return { ...result, order: toOrder(result.order) };
+      return { ...result, order: toCheckoutOrder(result.order, result.items) };
     } catch (error) {
       const failure = error as { name?: string; CancellationReasons?: Array<{ Code?: string }> };
       if (failure?.name !== "TransactionCanceledException") throw error;
@@ -64,7 +68,7 @@ export class DynamoCheckoutOrders implements CheckoutOrders {
         const current = await this.findById(input.orderId);
         if (current && current.status !== "awaiting_payment") {
           const result = await transitionAwaitingPaymentOrder(input);
-          return { ...result, order: toOrder(result.order) };
+          return { ...result, order: toCheckoutOrder(result.order, result.items) };
         }
       }
       // A paid session won against expiry; inventory remains held for its worker.

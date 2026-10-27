@@ -1,3 +1,4 @@
+import type { EmailRoute, NewEmailRoute } from "./domain/email-route.js";
 import {
   ConditionalCheckFailedException,
   PutItemCommand,
@@ -85,39 +86,11 @@ function isConditionalFailure(error: unknown) {
  * Creates the expectation before PutEvents. Duplicate HTTP requests reuse the
  * same deterministic emailJobId and must never reset a route that advanced.
  */
-export async function ensureEmailRoute(input: {
-  emailJobId: string;
-  campaignId: string;
-  batchIndex: number;
-  batchCount: number;
-  event: {
-    busName?: string;
-    source: string;
-    detailType: string;
-    detail: Record<string, unknown>;
-  };
-}) {
-  const now = new Date().toISOString();
-  const publishLeaseUntil = new Date(Date.now() + emailConfig.EMAIL_EVENT_PUBLISH_LEASE_SECONDS * 1_000).toISOString();
-  const record: EmailRouteRecord = {
-    ...key(input.emailJobId),
-    entityType: "EMAIL_ROUTE",
-    searchName: input.emailJobId,
-    emailJobId: input.emailJobId,
-    campaignId: input.campaignId,
-    batchIndex: input.batchIndex,
-    batchCount: input.batchCount,
-    status: "PUBLISHING",
-    routeStage: routeStages.PUBLISHING,
-    publishAttempts: 1,
-    publishLeaseUntil,
-    eventBusName: input.event.busName,
-    eventSource: input.event.source,
-    eventDetailType: input.event.detailType,
-    eventDetail: input.event.detail,
-    createdAt: now,
-    updatedAt: now
-  };
+export async function ensureEmailRoute(entity: EmailRoute<NewEmailRoute>, eventBusName?: string) {
+  const snapshot = entity.toSnapshot();
+  const publishLeaseUntil = new Date(Date.now() + emailConfig.EMAIL_EVENT_PUBLISH_LEASE_SECONDS * 1000).toISOString();
+  const record: EmailRouteRecord = { ...key(snapshot.emailJobId), entityType: 'EMAIL_ROUTE',
+    searchName: snapshot.emailJobId, ...snapshot, routeStage: routeStages.PUBLISHING, publishLeaseUntil, eventBusName };
 
   try {
     await rawDb.send(new PutItemCommand({

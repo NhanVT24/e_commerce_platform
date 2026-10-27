@@ -1,3 +1,22 @@
+import { BusinessError } from "../../../common/domain/business-error.js";
+export interface InventoryReportDeliverySnapshot {
+    reportId: string; reportDate: string; recipientEmail: string;
+    lowStockCount: number; outOfStockCount: number; productCount: number;
+    status: "pending"; createdAt: string; updatedAt: string;
+}
+export class InventoryReportDelivery {
+    readonly #state: Readonly<InventoryReportDeliverySnapshot>;
+    private constructor(snapshot: InventoryReportDeliverySnapshot) { this.#state = Object.freeze({ ...snapshot }); }
+    toSnapshot(): InventoryReportDeliverySnapshot { return { ...this.#state }; }
+    static create(report: InventoryReport, recipientEmail: string, lowStockCount: number, outOfStockCount: number, now: number): InventoryReportDelivery {
+        if (!recipientEmail.trim() || ![lowStockCount, outOfStockCount, lowStockCount + outOfStockCount].every(value => Number.isSafeInteger(value) && value >= 0) ||
+            !Number.isFinite(new Date(now).getTime())) throw new BusinessError("INVALID_INPUT", "Invalid inventory report delivery.");
+        const timestamp = new Date(now).toISOString();
+        return new InventoryReportDelivery({ reportId: report.id, reportDate: report.reportDate, recipientEmail,
+            lowStockCount, outOfStockCount, productCount: lowStockCount + outOfStockCount,
+            status: "pending", createdAt: timestamp, updatedAt: timestamp });
+    }
+}
 export class InventoryReport {
     readonly reportDate: string;
     constructor(referenceDate: Date) {

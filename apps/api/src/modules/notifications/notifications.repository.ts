@@ -1,4 +1,4 @@
-import crypto from "node:crypto";
+import type { Notification, NewNotificationSnapshot } from "./domain/notification.js";
 import { PutItemCommand, ScanCommand, UpdateItemCommand, type AttributeValue } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { databaseConfig } from "../../config/database-config.js";
@@ -31,31 +31,9 @@ export type NotificationRecord = {
   updatedAt: string;
 };
 
-export async function createNotification(input: {
-  email: string;
-  title: string;
-  message: string;
-  channel: "email" | "system";
-  status?: "pending" | "sent" | "read";
-  metadata?: Record<string, unknown>;
-}) {
-  const now = new Date().toISOString();
-  const id = crypto.randomUUID();
-  const record: NotificationRecord = {
-    PK: `NOTIFICATION#${id}`,
-    SK: "DETAIL",
-    entityType: "NOTIFICATION",
-    id,
-    customerEmail: input.email,
-    title: input.title,
-    message: input.message,
-    channel: input.channel,
-    status: input.status ?? "pending",
-    isRead: input.status === "read",
-    metadata: input.metadata,
-    createdAt: now,
-    updatedAt: now
-  };
+export async function createNotification(entity: Notification<NewNotificationSnapshot>) {
+  const snapshot = entity.toSnapshot();
+  const record: NotificationRecord = { PK: 'NOTIFICATION#' + snapshot.id, SK: 'DETAIL', entityType: 'NOTIFICATION', ...snapshot };
 
   await rawDb.send(new PutItemCommand({
     TableName,

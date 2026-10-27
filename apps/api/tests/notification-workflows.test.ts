@@ -1,3 +1,4 @@
+import { Order } from "../src/modules/storefront/domain/order.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { checkoutFixture } from "./helpers/checkout-fixture.js";
@@ -24,14 +25,14 @@ function setup(config: Partial<NotificationConfig> = {}) {
   const confirmations: Array<Parameters<NotificationEffects["orderConfirmation"]>[0]> = [];
   const reviews: PaymentReview[] = [], deleted: string[] = [];
   const legacy: NotifiedOrders = {
-    async findById() { events.push("legacy:find"); return { customerEmail: customer, status: "pending" }; },
+    async findById() { events.push("legacy:find"); return new Order({ id: "order-1", customerEmail: customer, status: "pending", totalAmount: 2000 }); },
     async hasSentSystemNotification() { events.push("legacy:sent-check"); return true; },
     async completePending() { events.push("legacy:complete"); return true; }
   };
   const payments: SettledPayments = { async find() { return { status: "success", amount: 2000, email: customer, orderId: "order-1", paymentConfirmedAt: "2026-10-22T00:01:00Z" }; } };
-  const effects: NotificationEffects = {
+  const effects: NotificationEffects = { newId: () => "test-notification",
     store: {
-      async createNotification(input) { events.push("create"); const row = notification(`new-${rows.length}`, input.email, input); rows.push(row); return row; },
+      async createNotification(entity) { events.push("create"); const input = entity.toSnapshot(); const row = notification(input.id, input.customerEmail, input); rows.push(row); return row; },
       async deleteNotification(id) { deleted.push(id); return true; }, async deleteNotifications(ids) { deleted.push(...ids); },
       async listAllNotifications() { return rows; }, async listNotificationsByCustomer(email) { return rows.filter(row => row.customerEmail === email); },
       async markNotificationAsRead(id) { events.push(`read:${id}`); }, async markNotificationAsSent(id) { events.push(`sent:${id}`); }
@@ -42,7 +43,7 @@ function setup(config: Partial<NotificationConfig> = {}) {
     async orderConfirmation(input) { confirmations.push(input); events.push("confirmation"); return { status: "queued", emailJobId: "mail" }; },
     async paymentFailure() { events.push("failure-email"); }
   };
-  const flow = new NotificationUseCases(new ConfirmOrderPayment(checkout.orders, payments, { async open(review) { reviews.push(review); } }),
+  const flow = new NotificationUseCases(new ConfirmOrderPayment(checkout.orders, payments, { async open(review) { reviews.push(review.toSnapshot()); } }),
     new CompleteNotifiedOrder(legacy), effects,
     { platformEventsEnabled: true, paymentEventsEnabled: true, commerceEventsEnabled: true, adminAlertsEnabled: true, adminEmail: "reports@example.test", ...config },
     { log() {}, warn() {}, error() {} });

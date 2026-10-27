@@ -1,3 +1,4 @@
+import type { EmailRoute, NewEmailRoute } from "../domain/email-route.js";
 export interface DeliveryMeta {
     id: string;
     senderEmail: string;
@@ -43,13 +44,7 @@ export interface EmailAdministrationPorts {
     listEmailDeliveriesWithStatus(limit: number): Promise<DeliveryMeta[]>;
     listFailedEmailRoutePublishes(limit: number): Promise<FailedMailRoute[]>;
     retryFailedEmailRoutePublish(id: string): Promise<boolean>;
-    ensureEmailRoute(input: {
-        emailJobId: string;
-        campaignId: string;
-        batchIndex: number;
-        batchCount: number;
-        event: MailEvent;
-    }): Promise<boolean>;
+    ensureEmailRoute(route: EmailRoute<NewEmailRoute>): Promise<boolean>;
     markEmailRoutePublished(input: {
         emailJobId: string;
         eventId: string;

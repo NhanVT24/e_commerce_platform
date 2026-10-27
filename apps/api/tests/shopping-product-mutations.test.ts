@@ -36,7 +36,7 @@ function incrementFixture(current: ProductSnapshot | null = snapshot) {
     async findById() { return current ? new Product(current) : null; },
     async increment(input) {
       writes.push(input);
-      return { product: new Product({ ...snapshot, [input.field]: input.nextValue, status: input.status, version: 2 }), representation: "saved" };
+      return { product: new Product({ ...input.product.toSnapshot(), version: 2 }), representation: "saved" };
     }
   };
   const publisher = { async publish(alert: InventoryStockAlert) { alerts.push(alert); } };
@@ -55,14 +55,14 @@ test("counter policy preserves clamp and checks safe integer overflow without a 
 test("increment handles stock and soldCount, snapshot version, owner/admin and alert transitions", async () => {
   const f = incrementFixture();
   assert.equal(await f.useCase.execute({ productId: id, field: "stock", incrementBy: -15, actor: owner }), "saved");
-  assert.equal(f.writes[0].nextValue, 5);
+  assert.equal(f.writes[0].product.stock, 5);
   assert.equal(f.writes[0].expectedVersion, 1);
   assert.equal(f.writes[0].expectedOwnerId, "owner");
   assert.equal(f.alerts[0].source, "admin.increment");
   assert.equal(f.alerts[0].status, "low_stock");
   const g = incrementFixture();
   await g.useCase.execute({ productId: id, field: "soldCount", incrementBy: -10, actor: admin });
-  assert.equal(g.writes[0].nextValue, 0);
+  assert.equal(g.writes[0].product.soldCount, 0);
   assert.equal(g.writes[0].expectedOwnerId, undefined);
   assert.equal(g.alerts.length, 0);
   const h = incrementFixture({ ...snapshot, stock: 4, status: "low_stock" });
@@ -138,7 +138,7 @@ test("delete verifies access and carries the authorized snapshot into the condit
   const repository: ProductDeleter = { async findById() { return current ? new Product(current) : null; }, async delete(input) { writes.push(input); } };
   const useCase = new DeleteProduct(repository);
   await useCase.execute({ productId: id, actor: owner });
-  assert.deepEqual(writes[0], { id, expectedVersion: 1, expectedOwnerId: "owner" });
+  assert.ok(writes[0].product instanceof Product); assert.equal(writes[0].product.version, 1); assert.equal(writes[0].expectedOwnerId, "owner");
   await useCase.execute({ productId: id, actor: admin });
   assert.equal(writes[1].expectedOwnerId, undefined);
   await assert.rejects(useCase.execute({ productId: id, actor: { subject: "other", isAdmin: false } }), hasCode("FORBIDDEN"));
@@ -233,14 +233,13 @@ function transport(client: DynamoDBClient, table: string) {
     close() { client.middlewareStack.remove("productMutationsTestTransport"); } };
 }
 
-const incrementInput = { id, field: "stock" as const, incrementBy: -15, nextValue: 5,
-  status: "low_stock" as const, expectedVersion: 1, expectedOwnerId: "owner" };
+const incrementInput = { product: new Product(snapshot).adjustCounter("stock", -15), field: "stock" as const, incrementBy: -15, expectedVersion: 1, expectedOwnerId: "owner" };
 
 test("counter adapter fixes soldCount alert metadata and preserves stock reset/index/response", async () => {
   const db = transport(rawDb, databaseConfig.DYNAMODB_TABLE_NAME);
   try {
     const adapter = new DynamoProductCounterRepository();
-    const sold = await adapter.increment({ ...incrementInput, field: "soldCount", incrementBy: 2, nextValue: 5, status: "active" });
+    const sold = await adapter.increment({ ...incrementInput, field: "soldCount", incrementBy: 2, product: new Product(snapshot).adjustCounter("soldCount", 2) });
     assert.equal(sold.representation.soldCount, 5);
     assert.equal(sold.representation.inventoryAlertSentAt, "previous-alert");
     assert.equal(sold.representation.customMetadata, "keep");
@@ -305,7 +304,7 @@ test("delete preserves audited transaction and audit actor; failed transaction i
   const db = transport(rawDb, databaseConfig.DYNAMODB_TABLE_NAME);
   try {
     const adapter = new DynamoProductDeleter();
-    const input = { id, expectedVersion: 1, expectedOwnerId: "owner" };
+    const input = { product: new Product(snapshot), expectedOwnerId: "owner" };
     const failure = new Error("transaction failed before commit");
     db.failNext("TransactWriteItemsCommand", failure);
     await assert.rejects(adapter.delete(input), error => error === failure);
@@ -327,7 +326,7 @@ test("delete marker failure does not run transaction; concurrent edit cannot del
   const db = transport(rawDb, databaseConfig.DYNAMODB_TABLE_NAME);
   try {
     const adapter = new DynamoProductDeleter();
-    const input = { id, expectedVersion: 1, expectedOwnerId: "owner" };
+    const input = { product: new Product(snapshot), expectedOwnerId: "owner" };
     const failure = new Error("marker unavailable");
     db.failNext("UpdateItemCommand", failure);
     await assert.rejects(adapter.delete(input), error => error === failure);

@@ -5,7 +5,7 @@ export type ProfilePatch = UserProfilePatch;
 export interface ProfileRepository {
     find(subject: string): Promise<Profile>;
     /** Update an existing USER_PROFILE only; never upsert a missing/unrelated row. */
-    update(subject: string, patch: ProfilePatch): Promise<void>;
+    update(change: ProfileChange): Promise<void>;
 }
 export interface ProfileAvatars {
     exists(key: string): Promise<boolean>;
@@ -27,7 +27,7 @@ export class UpdateProfile {
             if (!await this.avatars.exists(change.avatarKey))
                 throw new ApplicationError("INVALID_INPUT", "Avatar image does not exist.");
         }
-        await this.profiles.update(subject, change.toSnapshot());
+        await this.profiles.update(change);
         return this.queries.get(subject);
     }
 }

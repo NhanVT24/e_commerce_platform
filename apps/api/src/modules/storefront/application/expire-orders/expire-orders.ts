@@ -10,7 +10,9 @@ export class ExpireOrders {
     for await (const orderId of this.orders.expiredCandidates(checkedAt)) {
       try {
         // GSI results can be stale; the transaction rechecks state and deadline.
-        const result = await this.orders.transition({ orderId, status: "expired", expiresBefore: checkedAt });
+        const current = await this.orders.findById(orderId);
+        if (!current) continue;
+        const result = await this.orders.transition({ order: current, status: "expired", expiresBefore: checkedAt });
         if (result.changed) releasedCount++;
       } catch (error) { failed++; this.log.error("order.expiry_failed", { orderId, error: String(error) }); }
     }

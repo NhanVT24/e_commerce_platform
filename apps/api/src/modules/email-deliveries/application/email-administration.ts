@@ -1,5 +1,6 @@
 import { EmailCampaign } from "../domain/email-campaign.js";
 import { EmailDelivery } from "../domain/email-delivery.js";
+import { EmailRoute } from "../domain/email-route.js";
 import { ApplicationError } from "../../../common/application/application-error.js";
 import type { ApplicationLogger } from "../../../common/application/queue-events.js";
 import type { DeliveryMeta, EmailAdministrationPorts } from "./ports.js";
@@ -52,13 +53,13 @@ export class EmailAdministration {
                 text: input.text
             }
         };
-        await this.ports.ensureEmailRoute({
+        await this.ports.ensureEmailRoute(EmailRoute.create({
             emailJobId: input.emailJobId,
             campaignId: input.campaignId,
             batchIndex: input.batchIndex,
             batchCount: input.batchCount,
             event: trackedEvent
-        });
+        }, Date.now()));
         try {
             const event = await this.ports.publishEventBridgeEvent(trackedEvent);
             await this.ports.markEmailRoutePublished({

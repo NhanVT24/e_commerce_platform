@@ -1,4 +1,5 @@
-import { InventoryReport } from "../domain/inventory-report.js";
+import { InventoryReport, InventoryReportDelivery } from "../domain/inventory-report.js";
+import { EmailDelivery, type PendingEmailMeta, type PendingEmailRecipient } from "../../email-deliveries/domain/email-delivery.js";
 import { ApplicationError } from "../../../common/application/application-error.js";
 import type { ProductStatus } from "../../shopping/domain/product.js";
 export interface DigestProduct {
@@ -11,24 +12,13 @@ export interface DigestProduct {
     inventoryAlertSent: boolean;
 }
 export interface InventoryReportPorts {
+    newId(): string;
     listInventoryReportProducts(): Promise<DigestProduct[]>;
     markInventoryReportProductsAlerted(products: DigestProduct[]): Promise<number>;
-    createPendingInventoryReport(input: {
-        reportId: string;
-        reportDate: string;
-        recipientEmail: string;
-        lowStockCount: number;
-        outOfStockCount: number;
-    }): Promise<void>;
+    createPendingInventoryReport(report: InventoryReportDelivery): Promise<void>;
     markInventoryReportAccepted(id: string, message: string): Promise<boolean>;
     markInventoryReportFailed(id: string, reason: string): Promise<void>;
-    createPendingEmailDelivery(input: {
-        emailType: "inventory_daily_report";
-        recipientEmail: string;
-        senderEmail: string;
-        subject: string;
-        reportId: string;
-    }): Promise<{
+    createPendingEmailDelivery(entity: EmailDelivery<PendingEmailMeta, PendingEmailRecipient>): Promise<{
         id: string;
     }>;
     markEmailDeliveryAccepted(id: string, message: string): Promise<boolean>;
@@ -64,13 +54,8 @@ export class SendInventoryReport {
         const reportId = report.id;
         const { lowStockProducts, outOfStockProducts } = report.classify(products);
         try {
-            await this.ports.createPendingInventoryReport({
-                reportId,
-                reportDate,
-                recipientEmail: this.config.adminEmail,
-                lowStockCount: lowStockProducts.length,
-                outOfStockCount: outOfStockProducts.length
-            });
+            await this.ports.createPendingInventoryReport(InventoryReportDelivery.create(report, this.config.adminEmail,
+                lowStockProducts.length, outOfStockProducts.length, Date.now()));
         }
         catch (error) {
             if (error instanceof ApplicationError && error.code === "CONFLICT") {
@@ -78,13 +63,13 @@ export class SendInventoryReport {
             }
             throw error;
         }
-        const email = await this.ports.createPendingEmailDelivery({
+        const email = await this.ports.createPendingEmailDelivery(EmailDelivery.createSingle({
             emailType: "inventory_daily_report",
             recipientEmail: this.config.adminEmail,
             senderEmail: this.config.senderEmail ?? "",
             subject: this.ports.getInventoryDigestSubject(reportDate),
             reportId
-        });
+        }, this.ports.newId, Date.now()));
         let sesMessageId: string;
         try {
             sesMessageId = await this.ports.sendInventoryDigestEmail({

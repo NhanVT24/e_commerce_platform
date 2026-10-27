@@ -133,10 +133,8 @@ export class NotificationUseCases {
         metadata?: Record<string, unknown>;
     }) {
         Notification.assertSystemChannel(input.channel);
-        const notification = await this.effects.store.createNotification({
-            ...input,
-            status: "pending"
-        });
+        const entity = Notification.create({ ...input, id: this.effects.newId() }, Date.now());
+        const notification = await this.effects.store.createNotification(entity);
         this.logger.log(`[dynamo-notification] created id=${notification.id} channel=${notification.channel} email=${notification.customerEmail}`);
         await this.publishNotificationEvent(notification);
         return notification;
@@ -760,7 +758,9 @@ export class NotificationUseCases {
         const metadata = { audience: "admin", alertType: "inventory.stock.alert", eventId, productVersion,
             productId, productName, stock: payload.stock, previousStock: payload.previousStock,
             status: level, source: payload.source, changedBy: payload.changedBy };
-        const claim = await this.effects.inventory.createOnce({ eventId, email: this.config.adminEmail, title, message, metadata });
+        const notification = Notification.create({ id: this.effects.inventory.notificationId(eventId, this.config.adminEmail),
+            email: this.config.adminEmail, title, message, metadata, channel: "system" }, Date.now());
+        const claim = await this.effects.inventory.createOnce({ eventId, notification });
         if (!claim.created) return { type: "inventory.stock.alert", eventId, notificationId: claim.notificationId, duplicate: true };
         const effects: InventoryEffects = { notification: "SKIPPED", audit: "SKIPPED", sns: "SKIPPED" };
         const attempt = async (name: keyof InventoryEffects, enabled: boolean, run: () => Promise<unknown>) => {

@@ -1,5 +1,6 @@
 import { getAwaitingPaymentOrder } from "../../storefront/infrastructure/persistence/order-record.store.js";
 import crypto from "node:crypto";
+import { Payment } from "../domain/payment-session.js";
 import { createPaymentSession, getPaymentSessionByTxnRef } from "../vnpay.repository.js";
 import { serializeVnpayParams, signVnpayParams } from "../vnpay-signature.js";
 import type { PaymentLinkIssuer, CreatePaymentInput } from "../application/create-payment.js";
@@ -62,7 +63,7 @@ export class VnpayPaymentLinkIssuer implements PaymentLinkIssuer {
     const secureHash = signVnpayParams(params, paymentConfig.vnpayHashSecret);
     const paymentUrl = `${paymentConfig.vnpayPaymentUrl}?${query}&vnp_SecureHash=${secureHash}`;
 
-    try { await createPaymentSession({
+    try { await createPaymentSession(Payment.create({
       txnRef,
       orderId,
       email: input.email?.trim().toLowerCase(),
@@ -70,7 +71,7 @@ export class VnpayPaymentLinkIssuer implements PaymentLinkIssuer {
       amount,
       expiresAt: expiresAt.toISOString(),
       transactionDate: createDate, paymentUrl
-    }); } catch (error) {
+    }, createdAt.getTime())); } catch (error) {
       // Includes ambiguous commit responses: only the durable winner is replayed.
       const winner = await existing();
       if (winner) return winner;

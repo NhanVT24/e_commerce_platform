@@ -25,5 +25,5 @@ export class OrderItems {
         return new OrderItems([...merged].map(([productId, quantity]) => ({ productId, quantity })));
     }
     assertValid(): void { OrderItems.create(this.#items); }
-    toSnapshot(): CheckoutItem[] { return this.#items.map(item => ({ ...item })); }
+    toArray(): CheckoutItem[] { return this.#items.map(item => ({ ...item })); }
 }

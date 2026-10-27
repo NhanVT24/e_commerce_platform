@@ -1,3 +1,5 @@
+import { EmailDelivery } from "../../modules/email-deliveries/domain/email-delivery.js";
+import { randomUUID as newDeliveryId } from "node:crypto";
 import { SendEmailCommand } from "@aws-sdk/client-sesv2";
 import crypto from "node:crypto";
 import { emailConfig } from "../../config/email-config.js";
@@ -76,14 +78,14 @@ async function sendTrackedOrderEmail(input: {
   if (!emailConfig.SES_INVENTORY_REPORT_CONFIGURATION_SET_NAME) throw new Error("Missing SES feedback configuration set.");
   let email: Awaited<ReturnType<typeof createPendingEmailDelivery>>;
   try {
-    email = await createPendingEmailDelivery({
+    email = await createPendingEmailDelivery(EmailDelivery.createSingle({
       emailType: input.emailType,
       recipientEmail: input.toEmail,
       senderEmail: ordersSenderEmail() ?? "",
       subject: input.subject,
       relatedId: input.relatedId,
       emailId: input.emailId
-    });
+    }, newDeliveryId, Date.now()));
   } catch (error) {
     // A stable id was already claimed by an earlier attempt. Never issue a
     // second SES request: the previous outcome is either durable or unknown.

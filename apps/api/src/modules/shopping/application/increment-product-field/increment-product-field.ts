@@ -26,7 +26,7 @@ export class IncrementProductField<TResult> {
     const next = current.adjustCounter(field, incrementBy);
     const transition = next.stockAlertSince(current);
     const saved = await this.products.increment({
-      id: productId, field, incrementBy, nextValue: next[field], status: next.stockStatus, expectedVersion: current.version,
+      product: next, field, incrementBy, expectedVersion: current.version,
       expectedOwnerId: actor.isAdmin ? undefined : actor.subject,
       ...(this.delivery === "outbox" ? { inventoryAlert: transition ? { ...transition, source: "admin.increment" as const } : undefined, changedBy: actor.subject } : {})
     });

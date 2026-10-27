@@ -7,8 +7,8 @@ export class GetCheckoutStatus {
     let order = await this.orders.findById(orderId);
     if (!order || order.customerEmail !== email) throw new OrderActionError("NOT_FOUND", "Order not found.");
     const now = new Date(this.now()).toISOString();
-    if (order.status === "awaiting_payment" && order.lockedUntil <= now) {
-      order = (await this.orders.transition({ orderId, expectedCustomerEmail: email, status: "expired", expiresBefore: now })).order;
+    if (order.isCheckoutExpiredAt(now)) {
+      order = (await this.orders.transition({ order, expectedCustomerEmail: email, status: "expired", expiresBefore: now })).order;
     }
     return { orderId, status: order.status, lockedUntil: order.lockedUntil };
   }

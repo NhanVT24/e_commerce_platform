@@ -1,3 +1,4 @@
+import { Order, type OrderData } from "../src/modules/storefront/domain/order.js";
 import "reflect-metadata";
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -11,7 +12,7 @@ import { ReconcilePendingRefunds } from "../src/modules/storefront/application/r
 import { RefundResolution } from "../src/modules/storefront/application/refund-resolution.js";
 import { OrderActionError } from "../src/modules/storefront/application/order-action.error.js";
 import type { RefundGateway, RefundNotifier, RefundOrderRepository, RefundOutcome, OrderOperationLogger } from "../src/modules/storefront/application/ports/order-lifecycle-ports.js";
-import { isRefundEligible, REFUND_WINDOW_MS, type RefundOrder } from "../src/modules/storefront/domain/order-refund.js";
+import { isRefundEligible, REFUND_WINDOW_MS } from "../src/modules/storefront/domain/order-refund.js";
 import { DynamoRefundOrders } from "../src/modules/storefront/infrastructure/persistence/dynamo-refund-orders.js";
 import { DynamoOrderCancellation } from "../src/modules/storefront/infrastructure/persistence/dynamo-order-cancellation.js";
 import { VnpayRefundGateway } from "../src/modules/storefront/infrastructure/payments/vnpay-refund-gateway.js";
@@ -21,32 +22,32 @@ import { auditContext } from "../src/modules/audit-log/audit-context.js";
 const now = Date.parse("2026-10-20T01:00:00.000Z");
 const orderId = "order-1";
 const email = "owner@example.test";
-const paid = (): RefundOrder => ({ id: orderId, customerEmail: email, status: "paid", totalAmount: 2000,
+const paid = (): OrderData => ({ id: orderId, customerEmail: email, status: "paid", totalAmount: 2000,
   paymentTxnRef: "pay-1", paymentConfirmedAt: new Date(now - 60000).toISOString() });
-const pending = (): RefundOrder => ({ ...paid(), status: "refund_pending", refundRequestId: "refund-1", refundStatus: "pending" });
+const pending = (): OrderData => ({ ...paid(), status: "refund_pending", refundRequestId: "refund-1", refundStatus: "pending" });
 const sent: RefundOutcome = { status: "refund_sent", gatewayStatus: "06", transactionNo: "99" };
 const hasCode = (code: string) => (error: unknown) => error instanceof OrderActionError && error.code === code;
 
-function fixture(initial: RefundOrder = paid()) {
-  let order: RefundOrder | null = { ...initial };
+function fixture(initial: OrderData = paid()) {
+  let order: OrderData | null = { ...initial };
   let sends = 0;
   const notices: Array<Parameters<RefundNotifier["send"]>[0]> = [];
   const events: string[] = [];
   const orders: RefundOrderRepository = {
-    async findById() { return order ? { ...order } : null; },
-    async listPending() { return order ? [{ ...order }] : []; },
-    async claim(input) {
+    async findById() { return order ? new Order(order) : null; },
+    async listPending() { return order ? [new Order(order)] : []; },
+    async claim(claim) { const input = { ...claim.order, requestId: claim.order.refundRequestId };
       if (!order || order.status !== "paid" || order.refundRequestId || order.customerEmail !== input.customerEmail) {
         throw new OrderActionError("CONFLICT", "already claimed");
       }
       order = { ...order, status: "refund_pending", refundRequestId: input.requestId, refundStatus: "pending" };
     },
-    async saveOutcome(input) {
+    async saveOutcome(entity) { const snapshot = entity; const input = { requestId: snapshot.refundRequestId, outcome: { status: snapshot.status, gatewayStatus: snapshot.refundStatus, transactionNo: snapshot.refundTransactionNo } };
       if (!order || order.refundRequestId !== input.requestId) throw new OrderActionError("CONFLICT", "request changed");
-      if (order.status === "refund_sent" || order.status === "refund_rejected") return { order: { ...order }, changed: false };
+      if (order.status === "refund_sent" || order.status === "refund_rejected") return { order: new Order(order), changed: false };
       order = { ...order, status: input.outcome.status, refundStatus: input.outcome.gatewayStatus,
         refundTransactionNo: input.outcome.transactionNo };
-      return { order: { ...order }, changed: true };
+      return { order: new Order(order), changed: true };
     }
   };
   const gateway: RefundGateway = {
@@ -62,7 +63,7 @@ function fixture(initial: RefundOrder = paid()) {
     request: new RequestRefund(orders, gateway, resolution, log, () => "refund-1", () => now),
     refresh: new RefreshRefundStatus(orders, resolution),
     reconcile: new ReconcilePendingRefunds(orders, resolution, log),
-    sends: () => sends, current: () => order, setOrder(value: RefundOrder | null) { order = value; } };
+    sends: () => sends, current: () => order, setOrder(value: OrderData | null) { order = value; } };
 }
 
 test("refund eligibility preserves the exact five-minute cutoff and paid requirements", () => {
@@ -73,12 +74,12 @@ test("refund eligibility preserves the exact five-minute cutoff and paid require
 });
 
 test("cancel verifies ownership and preserves released=false for repeated transitions", async () => {
-  let order = { ...paid(), status: "awaiting_payment" as const } as RefundOrder;
+  let order = { ...paid(), status: "awaiting_payment" as const } as OrderData;
   let releases = 0;
-  const useCase = new CancelOrder({ async findById() { return order; }, async cancel() {
+  const useCase = new CancelOrder({ async findById() { return new Order(order); }, async cancel() {
     const changed = order.status === "awaiting_payment";
     if (changed) { releases++; order = { ...order, status: "cancelled" }; }
-    return { order, changed };
+    return { order: new Order(order), changed };
   } });
   await assert.rejects(useCase.execute("other@example.test", orderId), hasCode("NOT_FOUND"));
   assert.equal((await useCase.execute(email, orderId)).released, true);
@@ -167,8 +168,8 @@ test("refresh preserves pending on query failure/null and reports invalid paymen
 test("job skips stale terminal GSI candidates, bounds work and continues after an item failure", async () => {
   const f = fixture(pending());
   const other = { ...pending(), id: "order-2" };
-  f.orders.listPending = async limit => { assert.equal(limit, 100); return [pending(), other]; };
-  f.orders.findById = async id => id === "order-2" ? { ...other, status: "refund_sent" } : pending();
+  f.orders.listPending = async limit => { assert.equal(limit, 100); return [new Order(pending()), new Order(other)]; };
+  f.orders.findById = async id => new Order(id === "order-2" ? { ...other, status: "refund_sent" } : pending());
   f.gateway.query = async () => { throw new Error("one query failed"); };
   assert.deepEqual(await f.reconcile.execute(500), { checked: 2, resolved: 0, failed: 1 });
   await assert.rejects(f.reconcile.execute(0), hasCode("INVALID_INPUT"));
@@ -266,13 +267,13 @@ test("Dynamo claim guards owner/window/request identity and refund restoration c
   const db = transport(rawDb);
   try {
     const orders = new DynamoRefundOrders();
-    await assert.rejects(orders.claim({ orderId, customerEmail: "other@example.test", requestId: "spoofed", paymentConfirmedAt: paid().paymentConfirmedAt!, now }), hasCode("CONFLICT"));
+    await assert.rejects(orders.claim({ order: new Order({ ...paid(), customerEmail: "other@example.test" }).claimRefund("spoofed", now), now }), hasCode("CONFLICT"));
     assert.equal(db.order()?.status, "paid");
-    await orders.claim({ orderId, customerEmail: email, requestId: "refund-1", paymentConfirmedAt: paid().paymentConfirmedAt!, now });
+    await orders.claim({ order: new Order({ ...paid(), customerEmail: email }).claimRefund("refund-1", now), now });
     assert.match((db.writes[0] as UpdateItemCommandInput).ConditionExpression!, /customerEmail = :customerEmail/);
-    await assert.rejects(orders.claim({ orderId, customerEmail: email, requestId: "other", paymentConfirmedAt: paid().paymentConfirmedAt!, now }), hasCode("CONFLICT"));
+    await assert.rejects(orders.claim({ order: new Order({ ...paid(), customerEmail: email }).claimRefund("other", now), now }), hasCode("CONFLICT"));
     await auditContext.run({ auditActorType: "USER", auditActorId: "owner", auditActorRole: "customer", auditSource: "REFUND_API", auditReason: "refund", auditRequestId: "r1" }, async () => {
-      const results = await Promise.all([orders.saveOutcome({ orderId, requestId: "refund-1", outcome: sent }), orders.saveOutcome({ orderId, requestId: "refund-1", outcome: sent })]);
+      const results = await Promise.all([orders.saveOutcome(new Order(pending()).recordRefundOutcome(sent)), orders.saveOutcome(new Order(pending()).recordRefundOutcome(sent))]);
       assert.equal(results.filter(result => result.changed).length, 1);
     });
     assert.deepEqual(db.product(), { stock: 7, soldCount: 8, version: 2 });
@@ -289,12 +290,11 @@ test("inventory failure rolls back terminal transition and is not a competing-or
   db.setOrder(rawOrder("refund_pending"));
   db.setProduct({ stock: 5, soldCount: 0, version: 1 });
   try {
-    await assert.rejects(new DynamoRefundOrders().saveOutcome({ orderId, requestId: "refund-1", outcome: sent }),
+    await assert.rejects(new DynamoRefundOrders().saveOutcome(new Order(pending()).recordRefundOutcome(sent)),
       error => !(error instanceof OrderActionError));
     assert.equal(db.order()?.status, "refund_pending");
     assert.deepEqual(db.product(), { stock: 5, soldCount: 0, version: 1 });
-    const rejected = await new DynamoRefundOrders().saveOutcome({ orderId, requestId: "refund-1",
-      outcome: { status: "refund_rejected", gatewayStatus: "09" } });
+    const rejected = await new DynamoRefundOrders().saveOutcome(new Order(pending()).recordRefundOutcome({ status: "refund_rejected", gatewayStatus: "09" }));
     assert.equal(rejected.order.status, "refund_rejected");
     assert.deepEqual(db.product(), { stock: 5, soldCount: 0, version: 1 });
   } finally { db.close(); }

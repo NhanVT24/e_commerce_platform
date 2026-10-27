@@ -2,6 +2,9 @@ import { ProductMutationError } from "./product.error.js";
 export const productStatuses = ["active", "low_stock", "out_of_stock"] as const;
 export type ProductStatus = typeof productStatuses[number];
 export type ProductCounterField = "stock" | "soldCount";
+export const productEditableFields = ["name", "category", "brand", "sku", "stock", "price", "originalPrice", "imageUrl",
+    "location", "description", "rating", "soldCount", "featured", "color", "size", "material", "warrantyMonths",
+    "voltage", "capacityLiters", "ageRange", "skinType", "weightGrams", "expiryDate"] as const;
 export interface ProductActor {
     readonly subject: string;
     readonly isAdmin: boolean;
@@ -75,6 +78,12 @@ export class Product {
     get stockStatus(): ProductStatus { return Product.stockStatus(this.stock); }
     get version() { return this.#state.version; }
     toSnapshot(): ProductSnapshot { return { ...this.#state }; }
+    changesFor(fields: readonly (keyof ProductChanges)[]): ProductChanges {
+        if (fields.some(field => !productEditableFields.includes(field))) {
+            throw new ProductMutationError("INVALID_INPUT", "Invalid product field");
+        }
+        return Object.fromEntries(fields.map(field => [field, this.#state[field]]));
+    }
     /** Only the counters/version needed for safe writes, not a DTO schema check.
      * Rehydration is passive; creation/mutation paths opt into these invariants.
      */
@@ -86,8 +95,12 @@ export class Product {
         }
     }
     static create(id: string, ownerId: string, details: NewProductDetails): Product {
+        if (!id.trim() || !ownerId.trim() || !details.name.trim() || !Number.isFinite(details.price) || details.price < 0) {
+            throw new ProductMutationError("INVALID_INPUT", "Invalid product identity or price");
+        }
         Product.assertEditableStock(details.stock);
         const product = new Product({ ...details, id, ownerId, version: 1,
+            originalPrice: details.originalPrice ?? details.price,
             rating: details.rating ?? 4.8, soldCount: details.soldCount ?? 0,
             featured: details.featured ?? false, status: Product.stockStatus(details.stock) });
         product.assertValidState();
@@ -130,10 +143,17 @@ export class Product {
     update(changes: ProductChanges): Product {
         this.assertValidState();
         this.assertVersionCanAdvance();
+        changes = Object.fromEntries(Object.entries(changes).filter(([, value]) => value !== undefined));
+        if (Object.keys(changes).some(field => !productEditableFields.includes(field as keyof ProductChanges)) ||
+            (changes.name !== undefined && !changes.name.trim()) ||
+            [changes.price, changes.originalPrice].some(value => value !== undefined && (!Number.isFinite(value) || value < 0))) {
+            throw new ProductMutationError("INVALID_INPUT", "Invalid product changes");
+        }
         if (changes.stock !== undefined)
             Product.assertEditableStock(changes.stock);
         const stock = changes.stock ?? this.stock;
         const next = new Product({ ...this.#state, ...changes, id: this.id, ownerId: this.ownerId,
+            originalPrice: changes.originalPrice ?? this.#state.originalPrice ?? changes.price ?? this.#state.price ?? 0,
             version: this.version, stock, status: Product.stockStatus(stock) });
         next.assertValidState();
         return next;

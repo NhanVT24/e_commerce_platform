@@ -1,3 +1,4 @@
+import type { Order } from "../../domain/order.js";
 import { Logger } from "@nestjs/common";
 import { eventbridgeConfig } from "../../../../config/eventbridge-config.js";
 import { publishEventBridgeEvent } from "../../../../integrations/eventbridge/publisher.js";
@@ -8,12 +9,12 @@ import { queueOrderConfirmationEmail } from "../../../email-deliveries/order-con
 import type { NotificationsService } from "../../../notifications/notifications.service.js";
 import { getShoppingItem } from "../../../shopping/shopping.repository.js";
 import type { CheckoutItem } from "../../domain/checkout.js";
-import type { OrderFinalizationEffects, QueuedOrder, OrderStockChange } from "../../application/ports/order-finalization-ports.js";
+import type { OrderFinalizationEffects, OrderStockChange } from "../../application/ports/order-finalization-ports.js";
 
 export class NotificationOrderFinalizationEffects implements OrderFinalizationEffects {
   private readonly logger = new Logger("OrderFinalization");
   constructor(private readonly notificationsService: NotificationsService) {}
-  async succeeded(order: QueuedOrder, stockChanges: OrderStockChange[], requestId: string) {
+  async succeeded(order: Order, stockChanges: OrderStockChange[], requestId: string) {
     const email = order.customerEmail;
     this.logger.log(`[dynamo-order] created orderId=${order.id} requestId=${requestId ?? ""} customer=${email} status=${order.status} totalAmount=${order.totalAmount} itemCount=${order.items.length}`);
     await this.publishInventoryAlertsFromOrder(stockChanges, email);
@@ -39,7 +40,7 @@ export class NotificationOrderFinalizationEffects implements OrderFinalizationEf
       items: order.items.map((item) => ({
         productName: item.productName,
         quantity: item.quantity,
-        unitPrice: item.price,
+        unitPrice: item.unitPrice,
         originalUnitPrice: item.originalUnitPrice,
         lineTotal: item.lineTotal
       }))
