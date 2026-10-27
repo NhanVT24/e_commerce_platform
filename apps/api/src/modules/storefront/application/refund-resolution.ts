@@ -25,7 +25,7 @@ export class RefundResolution {
   async apply(order: RefundOrder, outcome: RefundOutcome) {
     let saved: Awaited<ReturnType<RefundOrderRepository["saveOutcome"]>>;
     try {
-      saved = await this.orders.saveOutcome({ orderId: order.id, requestId: order.refundRequestId!, outcome });
+      saved = await this.orders.saveOutcome(new Order(order).recordRefundOutcome(outcome));
     } catch (error) {
       this.log.error("refund.persistence_failed", { orderId: order.id, requestId: order.refundRequestId, error });
       throw error;

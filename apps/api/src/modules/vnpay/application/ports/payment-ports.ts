@@ -1,9 +1,10 @@
-import type { PaymentSession, VerifiedPaymentCallback } from "../../domain/payment.js";
+import type { PaymentSession } from "../../domain/payment.js";
+import type { Payment } from "../../domain/payment-session.js";
 
 export interface PaymentSessions {
   find(txnRef: string): Promise<PaymentSession | null>;
   /** Compare pending -> terminal atomically; on a lost race return the durable winner. */
-  confirm(callback: VerifiedPaymentCallback): Promise<{ session: PaymentSession | null; changed: boolean }>;
+  confirm(payment: Payment): Promise<{ session: PaymentSession | null; changed: boolean }>;
   markDispatched(txnRef: string): Promise<void>;
 }
 export interface PaymentEvent {

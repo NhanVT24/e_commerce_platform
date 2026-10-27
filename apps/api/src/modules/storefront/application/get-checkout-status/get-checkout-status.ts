@@ -1,5 +1,6 @@
 import type { CheckoutOrders } from "../ports/checkout-ports.js";
 import { OrderActionError } from "../order-action.error.js";
+import { Order } from "../../domain/order.js";
 
 export class GetCheckoutStatus {
   constructor(private readonly orders: CheckoutOrders, private readonly now: () => number = Date.now) {}
@@ -7,8 +8,8 @@ export class GetCheckoutStatus {
     let order = await this.orders.findById(orderId);
     if (!order || order.customerEmail !== email) throw new OrderActionError("NOT_FOUND", "Order not found.");
     const now = new Date(this.now()).toISOString();
-    if (order.status === "awaiting_payment" && order.lockedUntil <= now) {
-      order = (await this.orders.transition({ orderId, expectedCustomerEmail: email, status: "expired", expiresBefore: now })).order;
+    if (new Order(order).isCheckoutExpiredAt(now)) {
+      order = (await this.orders.transition({ order: new Order(order), expectedCustomerEmail: email, status: "expired", expiresBefore: now })).order;
     }
     return { orderId, status: order.status, lockedUntil: order.lockedUntil };
   }

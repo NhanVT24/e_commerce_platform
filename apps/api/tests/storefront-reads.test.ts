@@ -1,3 +1,4 @@
+import { Order } from "../src/modules/storefront/domain/order.js";
 import "reflect-metadata";
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -132,7 +133,7 @@ test("competing completions write one atomic status audit and preserve done on r
   const db = transport(rawDb), adapter = new DynamoNotifiedOrders();
   try {
     db.put({ PK: "ORDER#order-1", SK: "DETAIL", ...order, status: "pending" });
-    const results = await Promise.all([adapter.completePending("order-1"), adapter.completePending("order-1")]);
+    const results = await Promise.all([adapter.completePending(new Order({ id: "order-1", customerEmail: "owner@example.test", status: "done" })), adapter.completePending(new Order({ id: "order-1", customerEmail: "owner@example.test", status: "done" }))]);
     assert.equal(results.filter(Boolean).length, 1);
     assert.equal(db.get("ORDER#order-1", "DETAIL")?.status, "done");
     assert.equal(db.rows().filter(row => row.entityType === "ORDER_STATUS_AUDIT").length, 1);
@@ -144,11 +145,11 @@ test("completion acknowledges lost commit response but propagates failed transac
   const db = transport(rawDb), adapter = new DynamoNotifiedOrders();
   try {
     db.put({ PK: "ORDER#lost", SK: "DETAIL", ...order, status: "pending" });
-    db.loseNextTransactionResponse(); assert.equal(await adapter.completePending("lost"), false);
+    db.loseNextTransactionResponse(); assert.equal(await adapter.completePending(new Order({ id: "lost", customerEmail: "owner@example.test", status: "done" })), false);
     assert.equal(db.get("ORDER#lost", "DETAIL")?.status, "done");
     db.put({ PK: "ORDER#changed", SK: "DETAIL", ...order, status: "pending" });
     db.race(() => db.put({ PK: "ORDER#changed", SK: "DETAIL", ...order, status: "cancelled" }));
-    await assert.rejects(adapter.completePending("changed"));
+    await assert.rejects(adapter.completePending(new Order({ id: "changed", customerEmail: "owner@example.test", status: "done" })));
     assert.equal(db.get("ORDER#changed", "DETAIL#STATUS_CHANGE#done"), undefined);
   } finally { db.close(); }
 });

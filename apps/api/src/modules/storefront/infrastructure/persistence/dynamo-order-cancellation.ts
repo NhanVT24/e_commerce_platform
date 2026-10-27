@@ -10,7 +10,8 @@ export class DynamoOrderCancellation implements OrderCancellationRepository {
     return record ? toRefundOrder(record) : null;
   }
 
-  async cancel(orderId: string, customerEmail: string) {
+  async cancel(entity: Parameters<OrderCancellationRepository["cancel"]>[0]) {
+    const { id: orderId, customerEmail } = entity.toSnapshot();
     try {
       const result = await transitionAwaitingPaymentOrder({ orderId, expectedCustomerEmail: customerEmail, status: "cancelled" });
       return { order: toRefundOrder(result.order), changed: result.changed };

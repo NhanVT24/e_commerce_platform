@@ -35,6 +35,9 @@ const { DynamoNotifiedOrders } = await import("../dist/src/modules/notifications
 const { CompleteNotifiedOrder } = await import("../dist/src/modules/notifications/application/complete-notified-order.js");
 const { DynamoPaymentRecovery } = await import("../dist/src/modules/vnpay/infrastructure/dynamo-payment-recovery.js");
 const { DynamoProfiles } = await import("../dist/src/modules/customers/authorization/infrastructure/profile-adapters.js");
+const { ProfileChange } = await import("../dist/src/modules/customers/authorization/domain/user-profile.js");
+const { Order } = await import("../dist/src/modules/storefront/domain/order.js");
+const { Notification } = await import("../dist/src/modules/notifications/domain/notification.js");
 const { Product } = await import("../dist/src/modules/shopping/domain/product.js");
 const { DynamoInventoryAlertOutbox } = await import("../dist/src/modules/shopping/infrastructure/persistence/inventory-alert-outbox.js");
 const { DynamoInventoryNotifications } = await import("../dist/src/modules/notifications/infrastructure/inventory-notifications.js");
@@ -77,13 +80,13 @@ after(async () => {
 
 test("engine: profile updates cannot upsert a missing or unrelated record", async () => {
   const profiles = new DynamoProfiles(), subject = randomUUID();
-  await assert.rejects(profiles.update(subject, { displayName: "User" }), { code: "INVALID_INPUT" });
+  await assert.rejects(profiles.update(new ProfileChange(subject, { displayName: "User" }), { code: "INVALID_INPUT" }));
   assert.equal(await read(`USER#${subject}`, "PROFILE"), null);
   await put({ PK: `USER#${subject}`, SK: "PROFILE", entityType: "OTHER", displayName: "Original" });
-  await assert.rejects(profiles.update(subject, { displayName: "Wrong" }), { code: "INVALID_INPUT" });
+  await assert.rejects(profiles.update(new ProfileChange(subject, { displayName: "Wrong" }), { code: "INVALID_INPUT" }));
   assert.equal((await read(`USER#${subject}`, "PROFILE")).displayName, "Original");
   await put({ PK: `USER#${subject}`, SK: "PROFILE", entityType: "USER_PROFILE", displayName: "Original", avatarKey: "" });
-  await profiles.update(subject, { displayName: "Updated" });
+  await profiles.update(new ProfileChange(subject, { displayName: "Updated" }));
   assert.equal((await profiles.find(subject)).displayName, "Updated");
 });
 
@@ -94,8 +97,7 @@ test("engine: optimistic product writes allow one version winner and enforce own
     changes: { name }, expectedVersion: 1, actor })));
   assert.equal(results.filter(result => result.status === "fulfilled").length, 1);
   assert.equal((await read(`PRODUCT#${id}`)).version, 2);
-  await assert.rejects(repository.update({ id, changes: { name: "Wrong owner" }, expectedVersion: 2,
-    expectedOwnerId: "foreign", status: "active" }), { code: "CONFLICT" });
+  await assert.rejects(repository.update({ product: (await repository.findById(id)).update({ name: "Wrong owner" }), fields: ["name"], expectedVersion: 2, expectedOwnerId: "foreign" }), { code: "CONFLICT" });
   assert.equal((await read(`PRODUCT#${id}`)).version, 2);
 });
 
@@ -121,16 +123,16 @@ test("engine: competing checkouts cannot oversell; replay does not deduct stock 
   const id = await seedProduct(4), orders = new DynamoCheckoutOrders();
   const input = orderId => ({ orderId, email, items: [{ productId: id, quantity: 3 }], holdSeconds: 300 });
   const ids = [randomUUID(), randomUUID()];
-  const results = await Promise.allSettled(ids.map(orderId => orders.hold(input(orderId))));
+  const results = await Promise.allSettled(ids.map(orderId => holdCheckout(orders, input(orderId))));
   assert.equal(results.filter(result => result.status === "fulfilled").length, 1);
   const winner = ids[results.findIndex(result => result.status === "fulfilled")];
   assert.equal((await read(`PRODUCT#${id}`)).stock, 1);
-  await orders.hold(input(winner)); assert.equal((await read(`PRODUCT#${id}`)).stock, 1);
+  await holdCheckout(orders, input(winner)); assert.equal((await read(`PRODUCT#${id}`)).stock, 1);
   const details = await new GetOrderDetails(new DynamoOrderReader()).execute(email, winner);
   assert.equal(details.items[0].price, 1000); assert.equal(details.totalAmount, 3000);
   await assert.rejects(new GetOrderDetails(new DynamoOrderReader()).execute("foreign", winner), { code: "NOT_FOUND" });
-  assert.equal((await orders.transition({ orderId: winner, expectedCustomerEmail: email, status: "cancelled" })).changed, true);
-  assert.equal((await orders.transition({ orderId: winner, expectedCustomerEmail: email, status: "cancelled" })).changed, false);
+  assert.equal((await orders.transition({ order: new Order(await orders.findById(winner)), expectedCustomerEmail: email, status: "cancelled" })).changed, true);
+  assert.equal((await orders.transition({ order: new Order(await orders.findById(winner)), expectedCustomerEmail: email, status: "cancelled" })).changed, false);
   assert.equal((await read(`PRODUCT#${id}`)).stock, 4);
 });
 
@@ -145,7 +147,7 @@ test("engine: product/counter and outbox commit together; a rejected owner canno
   assert.equal(outbox.event.eventId, eventId); assert.equal(outbox.event.changedBy, actor.subject);
   assert.equal(outbox.status, "PENDING"); assert.equal(outbox.auditExpiresAt, undefined);
   assert.equal((await read(`PRODUCT#${id}`)).version, 2);
-  await assert.rejects(repository.update({ id, changes: { stock: 0 }, expectedVersion: 2, expectedOwnerId: "foreign", status: "out_of_stock",
+  await assert.rejects(repository.update({ product: (await repository.findById(id)).update({ stock: 0 }), fields: ["stock"], expectedVersion: 2, expectedOwnerId: "foreign",
     inventoryAlert: { ...outbox.event, stock: 0, previousStock: 5, status: "out_of_stock", previousStatus: "low_stock" }, changedBy: actor.subject }), { code: "CONFLICT" });
   assert.equal(await read(`INVENTORY_ALERT_OUTBOX#inventory.stock.alert:${id}:3`), null);
   assert.equal((await read(`PRODUCT#${id}`)).stock, 5);
@@ -210,7 +212,7 @@ test("engine: invalid event is quarantined; explicit recovery preserves identity
 test("engine: notification/receipt are atomic under concurrent delivery and receipt survives notification deletion", async () => {
   const store = new DynamoInventoryNotifications(), eventId = `inventory.stock.alert:${randomUUID()}:2`;
   const input = { eventId, email, title: "Low stock", message: "Stock=5", metadata: { eventId, audience: "admin" } };
-  const claims = await Promise.all(Array.from({ length: 5 }, () => store.createOnce(input)));
+  const claims = await Promise.all(Array.from({ length: 5 }, () => store.createOnce({ eventId: input.eventId, notification: Notification.create({ ...input, id: store.notificationId(input.eventId, input.email), channel: "system" }, Date.now()) })));
   assert.equal(claims.filter(item => item.created).length, 1);
   const winner = claims.find(item => item.created);
   assert.ok(await read(`NOTIFICATION#${winner.notificationId}`));
@@ -229,7 +231,7 @@ test("engine: publish-success/marker-failure repeats the same event without dupl
   await dueEvent(store, eventId, clock);
   store.due = async (now, limit) => (await findDue(now, limit)).filter(item => item.eventId === eventId);
   store.published = async (...args) => { if (failMarker) { failMarker = false; throw new Error("marker lost"); } return mark(...args); };
-  const effects = { inventory: new DynamoInventoryNotifications(), store: {},
+  const effects = { newId: randomUUID, inventory: new DynamoInventoryNotifications(), store: {},
     async publish() { external++; return { eventId: "bus-event", eventBusName: "bus" }; },
     async adminAlert() { external++; return { messageId: "sns", topicArn: "topic" }; } };
   const consumer = new NotificationUseCases(null, null, effects, { adminEmail: email, platformEventsEnabled: true, adminAlertsEnabled: true }, { log() {}, warn() {}, error() {} });
@@ -274,7 +276,7 @@ test("engine: legacy completion commits status/audit together and never creates 
     ExpressionAttributeValues: marshall({ ":pk": `ORDER#${id}`, ":prefix": "DETAIL#STATUS_CHANGE#" }) }));
   assert.equal(audit.Items.length, 1);
   const rejected = randomUUID(); await put({ PK: `ORDER#${rejected}`, SK: "DETAIL", status: "cancelled" });
-  await assert.rejects(adapter.completePending(rejected), { name: "TransactionCanceledException" });
+  await assert.rejects(adapter.completePending(new Order({ id: rejected, customerEmail: email, status: "done" })), { name: "TransactionCanceledException" });
   assert.equal(await read(`ORDER#${rejected}`, "DETAIL#STATUS_CHANGE#done"), null);
 });
 
@@ -296,3 +298,11 @@ test("engine: recovery checkpoint progresses across a filtered-empty GSI page an
   await assert.rejects(recovery.defer("engine-1", 1, "2030-01-01T00:00:00.000Z"), { name: "ConditionalCheckFailedException" });
   assert.equal((await read("PAYMENT#engine-1")).recoveryAttempts, 1);
 });
+
+async function holdCheckout(orders, input) {
+  let order = await orders.findForReplay(input.orderId);
+  if (order) order.assertCheckoutReplay(input.email, input.items, order.toSnapshot().items, new Date().toISOString());
+  else order = await orders.hold(Order.create({ id: input.orderId, customerEmail: input.email, items: input.items,
+    products: await orders.loadPrices(input.items), holdSeconds: input.holdSeconds, now: Date.now() }));
+  return { order: order.toSnapshot(), items: order.toSnapshot().items };
+}

@@ -1,9 +1,10 @@
 import type { RefundOrder, RefundPayment, RefundStatus } from "../../domain/order-refund.js";
+import type { Order } from "../../domain/order.js";
 
 export interface OrderCancellationRepository {
   findById(id: string): Promise<RefundOrder | null>;
   /** Conditional owner/state transition and inventory release in one transaction. */
-  cancel(orderId: string, customerEmail: string): Promise<{ order: RefundOrder; changed: boolean }>;
+  cancel(order: Order<RefundOrder>): Promise<{ order: RefundOrder; changed: boolean }>;
 }
 
 export interface RefundOutcome {
@@ -16,11 +17,11 @@ export interface RefundOrderRepository {
   findById(id: string): Promise<RefundOrder | null>;
   listPending(limit: number): Promise<RefundOrder[]>;
   /** Claim one refund identity while checking paid timestamp/window and ownership atomically. */
-  claim(input: { orderId: string; customerEmail: string; paymentConfirmedAt: string; requestId: string; now: number }): Promise<void>;
+  claim(input: { order: Order<RefundOrder>; now: number }): Promise<void>;
   /** Conditional requestId + pending transition. On refund_sent, inventory restoration
    * and the terminal transition must commit together. A competing winner is returned
    * as changed:false; infrastructure/inventory failures must propagate. */
-  saveOutcome(input: { orderId: string; requestId: string; outcome: RefundOutcome }): Promise<{ order: RefundOrder; changed: boolean }>;
+  saveOutcome(order: Order<RefundOrder>): Promise<{ order: RefundOrder; changed: boolean }>;
 }
 
 export interface RefundGateway {

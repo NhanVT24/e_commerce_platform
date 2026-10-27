@@ -5,6 +5,8 @@ import { normalizeCheckoutItems } from "../../application/checkout-items.js";
 import { OrderActionError } from "../../application/order-action.error.js";
 import { getAwaitingPaymentOrder, listOrderItems } from "./order-record.store.js";
 import type { OrderLifecycleStatus } from "../../domain/order-refund.js";
+import { Order, type CheckoutProductPrice, type LegacyOrderSnapshot } from "../../domain/order.js";
+import { toProduct } from "../../../shopping/infrastructure/persistence/product.mapper.js";
 export { getAwaitingPaymentOrder, listOrderItems } from "./order-record.store.js";
 import crypto from "node:crypto";
 import { GetItemCommand, PutItemCommand, ScanCommand, TransactWriteItemsCommand, UpdateItemCommand, type AttributeValue } from "@aws-sdk/client-dynamodb";
@@ -159,10 +161,8 @@ function buildOrderItemKey(orderId: string, productId: string) {
   return { PK: `ORDER#${orderId}`, SK: `ORDER_ITEM#${productId}` };
 }
 
-export async function createStorefrontOrder(input: CreateOrderPayload): Promise<StorefrontOrderCreationResult> {
+export async function createStorefrontOrder(input: CreateOrderPayload, prepared?: Order<LegacyOrderSnapshot>): Promise<StorefrontOrderCreationResult> {
   const normalizedItems = normalizeCheckoutItems(input.items);
-  const lines: OrderLine[] = [];
-  let totalAmount = 0;
   const now = new Date().toISOString();
   const orderId = input.requestId || crypto.randomUUID();
   if (input.requestId) {
@@ -173,7 +173,9 @@ export async function createStorefrontOrder(input: CreateOrderPayload): Promise<
     }
   }
   const productSnapshots = new Map<string, Record<string, any>>();
-  const saleCampaigns = await listActiveSaleCampaigns();
+  const entity = prepared ?? Order.createLegacy({ id: orderId, customerEmail: input.email, items: normalizedItems,
+    products: await readCheckoutPrices(normalizedItems), now: Date.now(), holdSeconds: 300 });
+  const snapshot = entity.toSnapshot();
 
   for (const item of normalizedItems) {
     const product = await readProductRecord(item.productId);
@@ -186,17 +188,10 @@ export async function createStorefrontOrder(input: CreateOrderPayload): Promise<
       throw new Error(`Insufficient stock for ${product.name}`);
     }
 
-    const price = resolveSalePrice(product, saleCampaigns).price;
-    const lineTotal = price * item.quantity;
-    totalAmount += lineTotal;
+    if (Number(product.version ?? 0) !== snapshot.items.find(line => line.productId === item.productId)?.version) {
+      throw new OrderActionError("CONFLICT", "Product inventory changed during checkout");
+    }
     productSnapshots.set(item.productId, product);
-    lines.push({
-      productId: item.productId,
-      productName: String(product.name ?? ""),
-      price,
-      quantity: item.quantity,
-      lineTotal
-    });
   }
   const orderRecord: StorefrontOrderRecord = {
     PK: `ORDER#${orderId}`,
@@ -204,11 +199,11 @@ export async function createStorefrontOrder(input: CreateOrderPayload): Promise<
     entityType: "ORDER",
     id: orderId,
     customerEmail: input.email,
-    status: "pending",
-    items: lines,
-    totalAmount,
-    createdAt: now,
-    updatedAt: now
+    status: snapshot.status,
+    items: snapshot.items.map(({ version: _version, ...line }) => line),
+    totalAmount: snapshot.totalAmount,
+    createdAt: snapshot.createdAt,
+    updatedAt: snapshot.updatedAt
   };
   try {
     await rawDb.send(new TransactWriteItemsCommand({
@@ -251,10 +246,10 @@ export async function createStorefrontOrder(input: CreateOrderPayload): Promise<
 
   const stockChanges: InventoryStockChange[] = normalizedItems.map(item => {
     const product = productSnapshots.get(item.productId)!;
-    const stock = Number(product.stock ?? 0) - item.quantity;
-    return { productId: item.productId, productName: String(product.name ?? ""), sku: product.sku,
-      previousStock: Number(product.stock ?? 0), stock, previousStatus: String(product.status ?? ""),
-      status: stock <= 0 ? "out_of_stock" : stock <= 10 ? "low_stock" : "active" };
+    const current = toProduct(product);
+    const changed = current.changeInventory({ stock: -item.quantity, sold: item.quantity }, Number(product.reservedStock ?? 0));
+    return { productId: current.id, productName: current.name, sku: current.sku,
+      previousStock: current.stock, stock: changed.stock, previousStatus: current.status, status: changed.stockStatus };
   });
 
   return {
@@ -276,68 +271,65 @@ export async function getOrderById(id: string) {
   return fromDynamoItem(result.Item) as StorefrontOrderRecord | null;
 }
 
-export async function createAwaitingPaymentOrder(input: {
-  orderId: string;
-  email: string;
-  items: Array<{ productId: string; quantity: number }>;
-  holdSeconds: number;
-  bankCode?: string;
-  locale?: "vn" | "en";
-}) {
-  const normalizedItems = normalizeCheckoutItems(input.items);
-  const now = new Date().toISOString();
-  const lockedUntil = new Date(Date.now() + input.holdSeconds * 1000).toISOString();
+/** Read-only prices; application passes these into Order.create. */
+export async function readCheckoutPrices(items: readonly { productId: string; quantity: number }[]): Promise<CheckoutProductPrice[]> {
   const saleCampaigns = await listActiveSaleCampaigns();
-  const products = new Map<string, Record<string, any>>();
-  const lines: StorefrontOrderItemRecord[] = [];
-  let totalAmount = 0;
-
-  for (const item of normalizedItems) {
+  const prices: CheckoutProductPrice[] = [];
+  for (const item of items) {
     const product = await readProductRecord(item.productId);
-    if (!product) throw new Error(`Product ${item.productId} not found`);
-
-    const stock = Number(product.stock ?? 0);
-    if (stock < item.quantity) {
-      throw new Error(`Insufficient stock for ${product.name}`);
-    }
-
-    const resolvedPrice = resolveSalePrice(product, saleCampaigns);
-    const unitPrice = resolvedPrice.price;
-    const lineTotal = unitPrice * item.quantity;
-    totalAmount += lineTotal;
-    products.set(item.productId, product);
-    lines.push({
-      ...buildOrderItemKey(input.orderId, item.productId),
-      entityType: "ORDER_ITEM",
-      orderId: input.orderId,
-      productId: item.productId,
-      customerEmail: input.email,
-      productName: String(product.name ?? ""),
-      unitPrice,
-      originalUnitPrice: resolvedPrice.originalPrice,
-      quantity: item.quantity,
-      lineTotal,
-      createdAt: now,
-      updatedAt: now
-    });
+    if (!product) throw new Error('Product ' + item.productId + ' not found');
+    const price = resolveSalePrice(product, saleCampaigns);
+    prices.push({ productId: item.productId, productName: String(product.name ?? ''),
+      unitPrice: price.price, originalUnitPrice: price.originalPrice,
+      stock: Number(product.stock ?? 0) - Number(product.reservedStock ?? 0), version: Number(product.version ?? 0) });
   }
+  return prices;
+}
 
+/** Compatibility entry point for maintenance/tests; construction uses the entity. */
+export async function createAwaitingPaymentOrder(input: {
+  orderId: string; email: string; items: Array<{ productId: string; quantity: number }>;
+  holdSeconds: number; bankCode?: string; locale?: 'vn' | 'en';
+}) {
+  const items = normalizeCheckoutItems(input.items);
+  return persistAwaitingPaymentOrder(Order.create({ id: input.orderId, customerEmail: input.email,
+    items, products: await readCheckoutPrices(items), now: Date.now(), holdSeconds: input.holdSeconds,
+    bankCode: input.bankCode, locale: input.locale }));
+}
+
+export async function persistAwaitingPaymentOrder(entity: Order<import('../../domain/order.js').NewCheckoutOrder>) {
+  const snapshot = entity.toSnapshot();
+  const now = snapshot.createdAt;
+  const normalizedItems = snapshot.items;
+  const products = new Map<string, Record<string, any>>();
+  for (const line of snapshot.items) {
+    const product = await readProductRecord(line.productId);
+    if (!product || Number(product.version ?? 0) !== line.version) {
+      throw new OrderActionError('CONFLICT', 'Inventory changed. Please refresh and retry checkout.');
+    }
+    products.set(line.productId, product);
+  }
+  const lines: StorefrontOrderItemRecord[] = snapshot.items.map(({ version: _version, stock: _stock, ...line }) => ({
+    ...buildOrderItemKey(snapshot.id, line.productId), entityType: "ORDER_ITEM",
+    orderId: snapshot.id, customerEmail: snapshot.customerEmail, ...line,
+    createdAt: snapshot.createdAt, updatedAt: snapshot.updatedAt
+  }));
   const order: StorefrontAwaitingPaymentOrderRecord = {
-    ...buildOrderMetaKey(input.orderId),
+    ...buildOrderMetaKey(snapshot.id),
     entityType: "ORDER",
-    customerEmail: input.email,
-    status: "awaiting_payment",
-    totalAmount,
-    itemCount: lines.length,
-    lockedUntil,
-    checkoutBankCode: input.bankCode, checkoutLocale: input.locale,
+    customerEmail: snapshot.customerEmail,
+    status: snapshot.status,
+    totalAmount: snapshot.totalAmount,
+    itemCount: snapshot.itemCount,
+    lockedUntil: snapshot.lockedUntil,
+    checkoutBankCode: snapshot.checkoutBankCode, checkoutLocale: snapshot.checkoutLocale,
     createdAt: now,
     updatedAt: now,
     ...serviceAuditMetadata({
       actorId: "service:checkout-api",
       source: "CHECKOUT_API",
       reason: "order_created",
-      requestId: input.orderId
+      requestId: snapshot.id
     })
   };
 
@@ -385,36 +377,21 @@ export async function transitionAwaitingPaymentOrder(input: {
 }) {
   const order = await getAwaitingPaymentOrder(input.orderId);
   if (!order) throw new Error("Order not found");
-  if (input.expectedCustomerEmail && order.customerEmail !== input.expectedCustomerEmail) {
-    throw new Error("Order customer does not match");
-  }
-  if ((input.expectedPaymentTxnRef && order.paymentTxnRef !== input.expectedPaymentTxnRef) ||
-    (input.expectedAmount !== undefined && order.totalAmount !== input.expectedAmount)) throw new Error("Payment correlation changed; reconciliation required");
-  if (input.expiresBefore && order.lockedUntil > input.expiresBefore) return { order, items: [], changed: false };
-  if (order.status !== "awaiting_payment") {
-    if (input.status === "paid" && !["paid", "refund_pending", "refund_sent", "refund_rejected"].includes(order.status)) {
-      throw new Error("Payment received after inventory was released; reconciliation required");
-    }
-    return { order, items: await listOrderItems(input.orderId), changed: false };
-  }
-
-  if (input.status !== "paid" && order.paymentTxnRef) {
-    const payment = await getPaymentSessionByTxnRef(order.paymentTxnRef);
-    if (payment?.status === "success") {
-      if (input.status === "expired") return { order, items: [], changed: false };
-      throw new OrderActionError("CONFLICT", "Payment confirmed; order synchronization is pending.");
-    }
-  }
+  const now = new Date().toISOString();
+  const paymentSucceeded = input.status !== 'paid' && order.status === 'awaiting_payment' && order.paymentTxnRef
+    ? (await getPaymentSessionByTxnRef(order.paymentTxnRef))?.status === 'success' : false;
+  const decision = new Order({ ...order, id: input.orderId }).checkoutTransition(input, now, paymentSucceeded);
+  if (!decision.changed) return { order, items: decision.loadItems ? await listOrderItems(input.orderId) : [], changed: false };
+  const next = decision.order.toSnapshot();
   const items = await listOrderItems(input.orderId);
   if (items.length === 0) throw new Error("Order has no held items");
-  const now = new Date().toISOString();
   const isPaymentSuccess = input.status === "paid";
   const inventoryWrites = (await Promise.all(items.map(async item => {
     const product = await readProductRecord(item.productId);
     if (!product) throw new Error(`Product ${item.productId} not found`);
-    return inventoryTransaction(product, { stock: isPaymentSuccess ? 0 : item.quantity, sold: isPaymentSuccess ? item.quantity : 0 }, now);
+    return inventoryTransaction(product, Order.checkoutInventoryDelta(item.quantity, input.status), now);
   }))).flat();
-  const paymentConfirmedAt = isPaymentSuccess && input.paymentConfirmedAt ? input.paymentConfirmedAt : now;
+  const paymentConfirmedAt = next.paymentConfirmedAt;
   const auditMetadata = input.status === "expired"
     ? serviceAuditMetadata({ actorId: "lambda:release-expired-orders", source: "ORDER_EXPIRY_WORKER", reason: "payment_timeout", requestId: input.orderId })
     : input.status === "paid"
@@ -456,7 +433,7 @@ export async function transitionAwaitingPaymentOrder(input: {
     ]
   }));
 
-  return { order: { ...order, status: input.status, updatedAt: now, ...(isPaymentSuccess ? { paymentConfirmedAt } : {}) }, items, changed: true };
+  return { order: { ...order, status: next.status, updatedAt: now, ...(isPaymentSuccess ? { paymentConfirmedAt } : {}) }, items, changed: true };
 }
 
 export async function listOrdersByCustomer(email: string) {

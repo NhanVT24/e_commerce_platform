@@ -1,3 +1,4 @@
+import type { Payment, NewPaymentSession } from "./domain/payment-session.js";
 import { GetItemCommand, PutItemCommand, TransactWriteItemsCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { databaseConfig } from "../../config/database-config.js";
@@ -44,39 +45,12 @@ export type PaymentSessionRecord = {
   auditRequestId?: string;
 };
 
-export async function createPaymentSession(input: {
-  txnRef: string;
-  orderId?: string;
-  email?: string;
-  orderInfo: string;
-  amount: number;
-  expiresAt: string;
-  transactionDate: string;
-  paymentUrl?: string;
-}) {
+export async function createPaymentSession(entity: Payment<NewPaymentSession>) {
+  const input = entity.toSnapshot();
   const now = new Date().toISOString();
-  const record: PaymentSessionRecord = {
-    PK: `PAYMENT#${input.txnRef}`,
-    SK: "DETAIL",
-    entityType: "PAYMENT_SESSION",
-    txnRef: input.txnRef,
-    paymentUrl: input.paymentUrl,
-    orderId: input.orderId,
-    email: input.email?.trim().toLowerCase() || undefined,
-    orderInfo: input.orderInfo,
-    amount: input.amount,
-    status: "pending",
-    createdAt: now,
-    updatedAt: now,
-    expiresAt: input.expiresAt,
-    transactionDate: input.transactionDate,
-    auditActorType: "SERVICE",
-    auditActorId: "service:checkout-api",
-    auditActorRole: "SYSTEM",
-    auditSource: "CHECKOUT_API",
-    auditReason: "payment_session_created",
-    auditRequestId: input.orderId ?? input.txnRef
-  };
+  const record: PaymentSessionRecord = { PK: 'PAYMENT#' + input.txnRef, SK: 'DETAIL', entityType: 'PAYMENT_SESSION', ...input,
+    auditActorType: 'SERVICE', auditActorId: 'service:checkout-api', auditActorRole: 'SYSTEM', auditSource: 'CHECKOUT_API',
+    auditReason: 'payment_session_created', auditRequestId: input.orderId ?? input.txnRef };
 
   const put = { TableName, Item: toDynamoItem(record), ConditionExpression: "attribute_not_exists(PK)" };
   if (input.orderId && input.paymentUrl) {

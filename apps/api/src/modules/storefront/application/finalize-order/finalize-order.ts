@@ -1,4 +1,5 @@
 import type { CheckoutItem } from "../../domain/checkout.js";
+import { Order } from "../../domain/order.js";
 import { normalizeCheckoutItems } from "../checkout-items.js";
 import { OrderActionError } from "../order-action.error.js";
 import { InsufficientOrderStock } from "../ports/order-finalization-ports.js";
@@ -10,7 +11,20 @@ export class FinalizeOrder {
     if (!email?.trim() || !requestId?.trim()) throw new OrderActionError("INVALID_INPUT", "Order finalization requires customer and requestId.");
     const normalized = normalizeCheckoutItems(items);
     let committed: Awaited<ReturnType<OrderFinalizationRepository["commit"]>>;
-    try { committed = await this.orders.commit(email, normalized, requestId); }
+    try {
+      let entity = await this.orders.findExisting(requestId);
+      if (entity) {
+        const snapshot = entity.toSnapshot();
+        if (!entity.isOwnedBy(email) || snapshot.items.length !== normalized.length ||
+            !normalized.every(item => snapshot.items.some(line => line.productId === item.productId && line.quantity === item.quantity))) {
+          throw new OrderActionError("CONFLICT", "Order request identity does not match.");
+        }
+      } else {
+        entity = Order.createLegacy({ id: requestId, customerEmail: email, items: normalized,
+          products: await this.orders.loadPrices(normalized), now: Date.now(), holdSeconds: 300 });
+      }
+      committed = await this.orders.commit(entity);
+    }
     catch (error) {
       if (!(error instanceof InsufficientOrderStock)) throw error;
       const failureReason = "Payment is failed due to insufficient stock for one or more items in your order. Please review your cart and try again.";

@@ -1,5 +1,5 @@
 import type { CheckoutItem } from "../../domain/checkout.js";
-import { OrderActionError } from "../order-action.error.js";
+import type { Order, LegacyOrderSnapshot, CheckoutProductPrice } from "../../domain/order.js";
 
 export interface QueuedOrder {
   id: string; customerEmail: string; status: "pending" | "done"; totalAmount: number; createdAt: string;
@@ -10,13 +10,13 @@ export interface OrderStockChange {
   previousStatus: string; status: string;
 }
 export interface OrderFinalizationRepository {
+  findExisting(id: string): Promise<Order<LegacyOrderSnapshot> | null>;
+  loadPrices(items: readonly CheckoutItem[]): Promise<CheckoutProductPrice[]>;
   /** requestId is the durable deduplication identity, including concurrent retries. */
-  commit(email: string, items: CheckoutItem[], requestId: string): Promise<{ order: QueuedOrder; stockChanges: OrderStockChange[] }>;
+  commit(order: Order<LegacyOrderSnapshot>): Promise<{ order: QueuedOrder; stockChanges: OrderStockChange[] }>;
 }
 export interface OrderFinalizationEffects {
   succeeded(order: QueuedOrder, stockChanges: OrderStockChange[], requestId: string): Promise<void>;
   failed(email: string, items: CheckoutItem[], requestId: string, failureReason: string): Promise<void>;
 }
-export class InsufficientOrderStock extends OrderActionError {
-  constructor(message: string) { super("CONFLICT", message); this.name = "InsufficientOrderStock"; }
-}
+export { InsufficientOrderStock } from "../../domain/order.error.js";

@@ -2,8 +2,9 @@ import { GetItemCommand, PutItemCommand, QueryCommand, UpdateItemCommand } from 
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { rawDb } from "../../../../database/dynamodb/client.js";
 import { databaseConfig } from "../../../../config/database-config.js";
-import type { PaymentReview, PaymentReviewWriter } from "../../application/ports/payment-review.js";
+import type { PaymentReviewWriter } from "../../application/ports/payment-review.js";
 import { OrderActionError } from "../../application/order-action.error.js";
+import { PaymentReview as PaymentReviewEntity } from "../../domain/payment-review.js";
 
 const TableName = databaseConfig.DYNAMODB_TABLE_NAME;
 const encode = (row: Record<string, unknown>) => marshall(row, { removeUndefinedValues: true });
@@ -11,7 +12,8 @@ const key = (txnRef: string) => encode({ PK: `PAYMENT_REVIEW#${txnRef}`, SK: "DE
 const conditional = (error: unknown) => (error as { name?: string })?.name === "ConditionalCheckFailedException";
 
 export class DynamoPaymentReviews implements PaymentReviewWriter {
-  async open(review: PaymentReview) {
+  async open(entity: PaymentReviewEntity) {
+    const review = entity.toSnapshot();
     const now = new Date().toISOString();
     try {
       await rawDb.send(new PutItemCommand({ TableName, Item: encode({ ...review, PK: `PAYMENT_REVIEW#${review.txnRef}`, SK: "DETAIL",
@@ -20,10 +22,11 @@ export class DynamoPaymentReviews implements PaymentReviewWriter {
       if (!conditional(error)) throw error;
       const current = await rawDb.send(new GetItemCommand({ TableName, Key: key(review.txnRef), ConsistentRead: true }));
       const saved = current.Item && unmarshall(current.Item);
-      if (!saved || saved.orderId !== review.orderId || saved.amount !== review.amount) throw new Error("Manual-review identity conflict");
+      if (!saved) throw new Error("Manual-review identity conflict");
+      const entity = new PaymentReviewEntity({ txnRef: review.txnRef, orderId: saved.orderId, amount: saved.amount, reason: saved.reason });
       // "Unconfirmed" is weaker than a later durable successful payment.
       // Reopen that case even if an operator previously closed the uncertainty.
-      if (saved.reason === "PROVIDER_UNCONFIRMED" && review.reason !== "PROVIDER_UNCONFIRMED") {
+      if (entity.shouldReopenFor(review)) {
         try {
           await rawDb.send(new UpdateItemCommand({ TableName, Key: key(review.txnRef),
             ConditionExpression: "#reason = :oldReason",

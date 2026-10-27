@@ -30,9 +30,10 @@ export class RequestRefund {
     this.gateway.assertReady();
     const requestId = this.newRequestId();
     const claimTime = this.now();
-    const claimed = new Order(order).claimRefund(requestId, claimTime).toSnapshot();
+    const claimedEntity = new Order(order).claimRefund(requestId, claimTime);
+    const claimed = claimedEntity.toSnapshot();
     try {
-      await this.orders.claim({ orderId, customerEmail: email, paymentConfirmedAt: order.paymentConfirmedAt!, requestId, now: claimTime });
+      await this.orders.claim({ order: claimedEntity, now: claimTime });
     } catch (error) {
       if (error instanceof OrderActionError && error.code === "CONFLICT") {
         throw new OrderActionError("CONFLICT", "Refund already requested or order changed.");

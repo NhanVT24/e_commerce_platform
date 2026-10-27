@@ -1,4 +1,5 @@
 import type { CheckoutOrders, CheckoutLine, HeldOrder } from "../../src/modules/storefront/application/ports/checkout-ports.js";
+import { Order } from "../../src/modules/storefront/domain/order.js";
 
 /** In-memory port double, not a DynamoDB transaction/concurrency emulator. */
 export function checkoutFixture() {
@@ -9,7 +10,9 @@ export function checkoutFixture() {
   const items: CheckoutLine[] = [{ productId: "product-1", productName: "Keyboard", quantity: 2, unitPrice: 1000, lineTotal: 2000 }];
   const events: string[] = [];
   const orders: CheckoutOrders = {
-    async hold() { events.push("hold"); return { order, items }; },
+    async findForReplay() { return null; },
+    async loadPrices() { return items.map(item => ({ ...item, stock: 100, version: 1 })); },
+    async hold() { events.push("hold"); return new Order({ ...order, items }); },
     async findById() { return order; },
     async attachPayment() { events.push("attach"); },
     async transition(input) {

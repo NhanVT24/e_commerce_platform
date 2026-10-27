@@ -14,7 +14,7 @@ export class PaymentProcessing {
     }
     let alreadyConfirmed = !new Payment(session).isPending;
     if (!alreadyConfirmed) {
-      const outcome = await this.sessions.confirm(callback);
+      const outcome = await this.sessions.confirm(new Payment(session).confirmedBy(callback));
       session = outcome.session;
       alreadyConfirmed = !outcome.changed;
     }

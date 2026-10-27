@@ -1,3 +1,5 @@
+import { Order } from "../src/modules/storefront/domain/order.js";
+import { holdCheckout, transitionCheckout, attachCheckout } from "./helpers/hold-checkout.js";
 import { transport } from "./helpers/payment-transport.js";
 import "reflect-metadata";
 import assert from "node:assert/strict";
@@ -29,6 +31,19 @@ const callback: VerifiedPaymentCallback = { txnRef: "NXtest", amountMinor: "2000
   gatewayTransactionStatus: "00", responseCode: "00", transactionNo: "123", bankCode: "TEST", payDate: "20261020080000" };
 const initialPayment = (): PaymentSession => ({ txnRef: "NXtest", orderId: id, email, amount: 2000, orderInfo: "Order", status: "pending" });
 
+test("checkout rejects stale price/version between domain construction and persistence", async () => {
+  const db = transport(rawDb), orders = new DynamoCheckoutOrders();
+  try {
+    const entity = Order.create({ id, customerEmail: email, items,
+      products: await orders.loadPrices(items), now: Date.now(), holdSeconds: 300 });
+    const current = db.get(`PRODUCT#${productId}`, "DETAIL")!;
+    db.put({ ...current, price: 2000, version: current.version + 1 });
+    await assert.rejects(orders.hold(entity), { code: "CONFLICT" });
+    assert.equal(db.get(`ORDER#${id}`), undefined);
+    assert.equal(db.get(`PRODUCT#${productId}`, "DETAIL")?.stock, 12);
+  } finally { db.close(); }
+});
+
 function paymentFixture() {
   let session: PaymentSession | null = initialPayment();
   let writes = 0, publishes = 0, releases = 0;
@@ -38,7 +53,7 @@ function paymentFixture() {
     async confirm(input) {
       if (session!.status !== "pending") return { session, changed: false };
       writes++;
-      session = { ...session!, ...input, status: input.transactionStatus };
+      session = input.toSnapshot();
       return { session, changed: true };
     },
     async markDispatched() { if (failMarker) { failMarker = false; throw new Error("marker unavailable"); } session!.paymentEventEnqueuedAt = "now"; }
@@ -108,7 +123,7 @@ test("checkout item policy rejects fractions, empty carts and merged quantity ov
 test("checkout keeps the hold on ambiguous payment failure instead of compensating a concurrent winner", async () => {
   const calls: string[] = [];
   const held = { id, customerEmail: email, status: "awaiting_payment" as const, totalAmount: 2000, lockedUntil: "future" };
-  const orders = { async hold() { calls.push("hold"); return { order: held, items: [{ ...items[0], productName: "P", unitPrice: 1000, lineTotal: 2000 }] }; },
+  const orders = { async findForReplay() { return null; }, async loadPrices() { return [{ ...items[0], productName: "P", unitPrice: 1000 }]; }, async hold() { calls.push("hold"); return new Order({ ...held, items: [{ ...items[0], productName: "P", unitPrice: 1000, lineTotal: 2000 }] }); },
     async transition() { calls.push("release"); throw new Error("release unavailable"); }, async attachPayment() { calls.push("attach"); },
     async findById() { return held; }, async *expiredCandidates() {} };
   const useCase = new CreateCheckout(orders, { async create() { calls.push("payment"); throw new Error("payment unavailable"); } },
@@ -132,8 +147,8 @@ test("payment creation trusts committed checkout price and validates amount/expi
 test("expiry continues after a per-order failure and passes an exact deadline to the transaction", async () => {
   const useCase = new ExpireOrders({ async *expiredCandidates() { yield "a"; yield "b"; },
     async transition(input) { assert.equal(input.expiresBefore, new Date(clock).toISOString());
-      if (input.orderId === "a") throw new Error("contention"); return { changed: true, order: null!, items: [] }; },
-    async hold() { throw new Error("unused"); }, async findById() { return null; }, async attachPayment() {} }, log, () => clock);
+      if (input.order.toSnapshot().id === "a") throw new Error("contention"); return { changed: true, order: null!, items: [] }; },
+    async findForReplay() { return null; }, async loadPrices() { return []; }, async hold() { throw new Error("unused"); }, async findById(id) { return { id, customerEmail: email, status: "awaiting_payment", totalAmount: 2000, lockedUntil: new Date(clock).toISOString() }; }, async attachPayment() {} }, log, () => clock);
   assert.deepEqual(await useCase.execute(), { ok: false, releasedCount: 1, failed: 1, checkedAt: new Date(clock).toISOString() });
 });
 
@@ -154,12 +169,12 @@ test("inventory builder atomically mirrors status/counters and prevents duplicat
 test("SDK checkout hold/cancel preserve snapshot and duplicate request cannot deduct stock twice", async () => {
   const db = transport(rawDb), orders = new DynamoCheckoutOrders();
   try {
-    await orders.hold({ orderId: id, email, items, holdSeconds: 300 });
+    await holdCheckout(orders, { orderId: id, email, items, holdSeconds: 300 });
     assert.equal(db.get(`PRODUCT#${productId}`, "DETAIL")?.stock, 10);
     assert.equal(db.get(`PRODUCT#${productId}`, "DETAIL")?.status, "low_stock");
-    assert.equal((await orders.hold({ orderId: id, email, items, holdSeconds: 300 })).order.id, id);
+    assert.equal((await holdCheckout(orders, { orderId: id, email, items, holdSeconds: 300 })).order.id, id);
     assert.equal(db.get(`PRODUCT#${productId}`, "DETAIL")?.stock, 10);
-    await orders.transition({ orderId: id, expectedCustomerEmail: email, status: "cancelled" });
+    await transitionCheckout(orders, { orderId: id, expectedCustomerEmail: email, status: "cancelled" });
     assert.equal(db.get(`PRODUCT#${productId}`, "DETAIL")?.stock, 12);
     assert.equal(db.get(`PRODUCT#${productId}`, "DETAIL")?.status, "active");
     const indexes = db.rows().filter(row => row.entityType === "PRODUCT_CATEGORY_INDEX");
@@ -171,8 +186,8 @@ test("SDK checkout hold/cancel preserve snapshot and duplicate request cannot de
 test("SDK worker verifies durable payment, commits sold once and tolerates replay after refund", async () => {
   const db = transport(rawDb), orders = new DynamoCheckoutOrders();
   try {
-    await orders.hold({ orderId: id, email, items, holdSeconds: 300 });
-    await orders.attachPayment(id, "NXtest", email, "https://gateway.example.test/pay");
+    await holdCheckout(orders, { orderId: id, email, items, holdSeconds: 300 });
+    await attachCheckout(orders, id, "NXtest", email, "https://gateway.example.test/pay");
     db.put({ ...initialPayment(), PK: "PAYMENT#NXtest", SK: "DETAIL", entityType: "PAYMENT_SESSION", status: "success" });
     const useCase = new ConfirmOrderPayment(orders, new DynamoPaymentSessions(), { async open() {} });
     const input = { orderId: id, email, txnRef: "NXtest", amount: 2000 };
@@ -189,26 +204,26 @@ test("SDK worker verifies durable payment, commits sold once and tolerates repla
 test("expiry cannot release a recorded successful payment, including success racing with its transaction", async () => {
   const db = transport(rawDb), orders = new DynamoCheckoutOrders();
   try {
-    await orders.hold({ orderId: id, email, items, holdSeconds: 300 });
-    await orders.attachPayment(id, "NXtest", email, "https://gateway.example.test/pay");
+    await holdCheckout(orders, { orderId: id, email, items, holdSeconds: 300 });
+    await attachCheckout(orders, id, "NXtest", email, "https://gateway.example.test/pay");
     db.put({ ...initialPayment(), PK: "PAYMENT#NXtest", SK: "DETAIL", status: "pending" });
     const future = new Date(Date.now() + 600000).toISOString();
     db.race(() => db.put({ ...db.get("PAYMENT#NXtest", "DETAIL"), status: "success" }));
-    const expired = await orders.transition({ orderId: id, status: "expired", expiresBefore: future });
+    const expired = await transitionCheckout(orders, { orderId: id, status: "expired", expiresBefore: future });
     assert.equal(expired.changed, false);
     assert.equal(db.get(`ORDER#${id}`)?.status, "awaiting_payment");
     assert.equal(db.get(`PRODUCT#${productId}`, "DETAIL")?.stock, 10);
-    assert.equal((await orders.transition({ orderId: id, status: "expired", expiresBefore: future })).changed, false);
-    await assert.rejects(orders.transition({ orderId: id, status: "cancelled" }), /Payment confirmed/);
+    assert.equal((await transitionCheckout(orders, { orderId: id, status: "expired", expiresBefore: future })).changed, false);
+    await assert.rejects(transitionCheckout(orders, { orderId: id, status: "cancelled" }), /Payment confirmed/);
   } finally { db.close(); }
 });
 
 test("late payment after release remains recorded and requires reconciliation without selling inventory", async () => {
   const db = transport(rawDb), orders = new DynamoCheckoutOrders();
   try {
-    await orders.hold({ orderId: id, email, items, holdSeconds: 300 });
-    await orders.attachPayment(id, "NXtest", email, "https://gateway.example.test/pay");
-    await orders.transition({ orderId: id, status: "expired", expiresBefore: new Date(Date.now() + 600000).toISOString() });
+    await holdCheckout(orders, { orderId: id, email, items, holdSeconds: 300 });
+    await attachCheckout(orders, id, "NXtest", email, "https://gateway.example.test/pay");
+    await transitionCheckout(orders, { orderId: id, status: "expired", expiresBefore: new Date(Date.now() + 600000).toISOString() });
     db.put({ ...initialPayment(), PK: "PAYMENT#NXtest", SK: "DETAIL", status: "success" });
     await assert.rejects(new ConfirmOrderPayment(orders, new DynamoPaymentSessions(), { async open() {} }).execute({ orderId: id, email, txnRef: "NXtest", amount: 2000 }), /reconciliation required/);
     assert.equal(db.get("PAYMENT#NXtest", "DETAIL")?.status, "success");
@@ -221,7 +236,7 @@ test("inventory version race rolls back order and index changes", async () => {
   const db = transport(rawDb), orders = new DynamoCheckoutOrders();
   try {
     db.race(() => db.put({ ...db.get(`PRODUCT#${productId}`, "DETAIL"), version: 2, stock: 11 }));
-    await assert.rejects(orders.hold({ orderId: id, email, items, holdSeconds: 300 }));
+    await assert.rejects(holdCheckout(orders, { orderId: id, email, items, holdSeconds: 300 }));
     assert.equal(db.get(`ORDER#${id}`), undefined);
     assert.equal(db.get(`PRODUCT#${productId}`, "DETAIL")?.stock, 11);
     assert.equal(db.rows().filter(row => row.entityType === "PRODUCT_CATEGORY_INDEX").length, 0);
@@ -239,7 +254,7 @@ test("queued finalization retry after effect failure reuses the order and never 
     assert.equal(result.orderId, id);
     assert.equal(db.get(`PRODUCT#${productId}`, "DETAIL")?.stock, 10);
     assert.equal(db.get(`PRODUCT#${productId}`, "DETAIL")?.soldCount, 2);
-    await assert.rejects(useCase.execute("other@example.test", items, id), /another order/);
+    await assert.rejects(useCase.execute("other@example.test", items, id), /identity does not match/);
     await assert.rejects(useCase.execute(email, items), /requestId/);
   } finally { db.close(); }
 });
