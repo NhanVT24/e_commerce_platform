@@ -4,3 +4,6 @@ export class OrderActionError extends Error {
         this.name = "OrderActionError";
     }
 }
+export class InsufficientOrderStock extends OrderActionError {
+    constructor(message: string) { super("CONFLICT", message); this.name = "InsufficientOrderStock"; }
+}

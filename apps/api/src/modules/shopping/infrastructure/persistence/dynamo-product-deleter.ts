@@ -10,7 +10,7 @@ import { toProduct } from "./product.mapper.js";
 import { readProductRecord, toDynamoItem, rethrowProductConflict, missingProductConflict } from "./product-record.store.js";
 const TableName = databaseConfig.DYNAMODB_TABLE_NAME;
 
-export async function deleteProductRecord(id: string, expectedOwnerSub?: string, expectedVersion?: number) {
+async function deleteProductRecord(id: string, expectedOwnerSub?: string, expectedVersion?: number) {
   const current = await readProductRecord(id);
   if (!current) {
     const error = new Error("Product not found");
@@ -57,7 +57,10 @@ export class DynamoProductDeleter implements ProductDeleter {
     return record ? toProduct(record) : null;
   }
   async delete(input: Parameters<ProductDeleter["delete"]>[0]): Promise<void> {
-    try { await deleteProductRecord(input.id, input.expectedOwnerId, input.expectedVersion); }
+    try {
+      input.product.assertValidState();
+      await deleteProductRecord(input.product.id, input.expectedOwnerId, input.product.version);
+    }
     catch (error) { rethrowProductConflict(error, [1]); }
   }
 }

@@ -1,3 +1,4 @@
+import type { InventoryReportDelivery } from "./domain/inventory-report.js";
 import {
   ConditionalCheckFailedException,
   GetItemCommand,
@@ -56,27 +57,9 @@ function fromDynamoItem(item?: Record<string, AttributeValue>) {
   return item ? unmarshall(item) as InventoryReportRecord : null;
 }
 
-export async function createPendingInventoryReport(input: {
-  reportId: string;
-  reportDate: string;
-  recipientEmail: string;
-  lowStockCount: number;
-  outOfStockCount: number;
-}) {
-  const now = new Date().toISOString();
-  const record: InventoryReportRecord = {
-    ...reportKey(input.reportId),
-    entityType: "INVENTORY_DAILY_REPORT",
-    reportId: input.reportId,
-    reportDate: input.reportDate,
-    status: "pending",
-    recipientEmail: input.recipientEmail,
-    lowStockCount: input.lowStockCount,
-    outOfStockCount: input.outOfStockCount,
-    productCount: input.lowStockCount + input.outOfStockCount,
-    createdAt: now,
-    updatedAt: now
-  };
+export async function createPendingInventoryReport(entity: InventoryReportDelivery) {
+  const snapshot = entity.toSnapshot();
+  const record: InventoryReportRecord = { ...reportKey(snapshot.reportId), entityType: 'INVENTORY_DAILY_REPORT', ...snapshot };
 
   await rawDb.send(new PutItemCommand({
     TableName,

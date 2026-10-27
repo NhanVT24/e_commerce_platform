@@ -13,7 +13,7 @@ import { normalizeText, toProductRecord, toProduct } from "./product.mapper.js";
 
 const TableName = databaseConfig.DYNAMODB_TABLE_NAME;
 
-export async function updateProductRecord(id: string, patch: ProductRecord, version: number, expectedOwnerSub?: string, status?: ProductStatus, alert?: InventoryStockAlert, changedBy = "") {
+async function updateProductRecord(id: string, patch: ProductRecord, version: number, expectedOwnerSub?: string, status?: ProductStatus, alert?: InventoryStockAlert, changedBy = "") {
   const current = await readProductRecord(id);
   if (!current) {
     const error = new Error("Product not found");
@@ -121,8 +121,11 @@ export class DynamoProductWriteRepository implements ProductWriteRepository<Prod
 
   async update(input: Parameters<ProductWriteRepository<ProductRecord>["update"]>[0]) {
     try {
+      input.product.assertValidState();
+      input.product.assertVersion(input.expectedVersion);
+      const patch = input.product.changesFor(input.fields);
       const record = await updateProductRecord(
-        input.id, { ...input.changes }, input.expectedVersion, input.expectedOwnerId, input.status, input.inventoryAlert, input.changedBy
+        input.product.id, { ...patch }, input.expectedVersion, input.expectedOwnerId, input.product.stockStatus, input.inventoryAlert, input.changedBy
       );
       return { product: toProduct(record), representation: record };
     } catch (error) {

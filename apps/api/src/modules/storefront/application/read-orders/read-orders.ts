@@ -1,4 +1,3 @@
-import { Order } from "../../domain/order.js";
 import type { OrderReader } from "../ports/order-reader.js";
 import { OrderActionError } from "../order-action.error.js";
 
@@ -11,7 +10,7 @@ export class GetOrderDetails {
     const order = legacy ?? await this.orders.findCheckout(id);
     // The same response for missing and foreign orders prevents existence disclosure.
     if (!order) throw new OrderActionError("NOT_FOUND", "Order not found.");
-    new Order(order).assertOwnedBy(email);
+    if (order.customerEmail !== email) throw new OrderActionError("NOT_FOUND", "Order not found.");
     const items = legacy ? legacy.items : await this.orders.listItems(id);
     return { ...order, items, serverNow: new Date(this.now()).toISOString() };
   }
@@ -21,6 +20,6 @@ export class ListMyOrders {
   constructor(private readonly orders: OrderReader) {}
   async execute(email: string) {
     // Defense against an adapter accidentally returning another customer's row.
-    return (await this.orders.listByCustomer(email)).filter(order => new Order(order).isOwnedBy(email));
+    return (await this.orders.listByCustomer(email)).filter(order => order.customerEmail === email);
   }
 }

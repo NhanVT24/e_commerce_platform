@@ -1,3 +1,5 @@
+import { PaymentReview as PaymentReviewEntity } from "../src/modules/storefront/domain/payment-review.js";
+import { holdCheckout, transitionCheckout, attachCheckout } from "./helpers/hold-checkout.js";
 import "reflect-metadata";
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -130,7 +132,7 @@ test("overlapping jobs can claim one provider-query attempt only", async () => {
 test("interrupted checkout provisioning resumes without deducting inventory twice and commits one session/link", async () => {
   const db = transport(rawDb), orders = new DynamoCheckoutOrders(), issuer = new VnpayPaymentLinkIssuer(() => config);
   try {
-    await orders.hold({ orderId: id, email, items, holdSeconds: 300, bankCode: "NCB", locale: "en" });
+    await holdCheckout(orders, { orderId: id, email, items, holdSeconds: 300, bankCode: "NCB", locale: "en" });
     const checkout = new CreateCheckout(orders, { create: input => issuer.issue(input, { ipAddress: "127.0.0.1", amount: input.amount,
       orderId: input.orderId, createdAt: new Date(), expiresAt: new Date(input.expiresAt) }) }, log, () => id);
     await new ResumeCheckoutProvisioning(checkout).resume(id);
@@ -147,7 +149,7 @@ test("interrupted checkout provisioning resumes without deducting inventory twic
 test("concurrent issuers replay the atomic winner and never leave an orphan session", async () => {
   const db = transport(rawDb), orders = new DynamoCheckoutOrders(), issuer = new VnpayPaymentLinkIssuer(() => config);
   try {
-    const hold = await orders.hold({ orderId: id, email, items, holdSeconds: 300 });
+    const hold = await holdCheckout(orders, { orderId: id, email, items, holdSeconds: 300 });
     const detail = { ipAddress: "ip", amount: 2000, orderId: id, createdAt: new Date(), expiresAt: new Date(hold.order.lockedUntil) };
     const results = await Promise.all([issuer.issue({ email, items }, detail), issuer.issue({ email, items }, detail)]);
     assert.equal(results[0].txnRef, results[1].txnRef);
@@ -159,7 +161,7 @@ test("concurrent issuers replay the atomic winner and never leave an orphan sess
 test("an expiry race rolls back both session and link, without returning a usable payment URL", async () => {
   const db = transport(rawDb), orders = new DynamoCheckoutOrders(), issuer = new VnpayPaymentLinkIssuer(() => config);
   try {
-    const hold = await orders.hold({ orderId: id, email, items, holdSeconds: 300 });
+    const hold = await holdCheckout(orders, { orderId: id, email, items, holdSeconds: 300 });
     db.race(() => db.put({ ...db.get(`ORDER#${id}`), status: "expired" }));
     await assert.rejects(issuer.issue({ email, items }, { ipAddress: "ip", amount: 2000, orderId: id,
       createdAt: new Date(), expiresAt: new Date(hold.order.lockedUntil) }));
@@ -171,7 +173,7 @@ test("an expiry race rolls back both session and link, without returning a usabl
 test("ambiguous atomic commit response replays its durable session instead of creating another", async () => {
   const db = transport(rawDb), orders = new DynamoCheckoutOrders(), issuer = new VnpayPaymentLinkIssuer(() => config);
   try {
-    const held = await orders.hold({ orderId: id, email, items, holdSeconds: 300 });
+    const held = await holdCheckout(orders, { orderId: id, email, items, holdSeconds: 300 });
     db.loseNextTransactionResponse();
     const payment = await issuer.issue({ email, items }, { amount: 2000, orderId: id, ipAddress: "ip",
       createdAt: new Date(), expiresAt: new Date(held.order.lockedUntil) });
@@ -196,14 +198,14 @@ test("refund recovery progresses past filtered-out paid orders on the existing e
 test("manual-review cursor is scoped, paginates and preserves independently resolved cases", async () => {
   const db = transport(rawDb), reviews = new DynamoPaymentReviews();
   try {
-    for (const txnRef of ["NXa", "NXb"]) await reviews.open({ txnRef, orderId: id, amount: 2000, reason: "PAID_AFTER_RELEASE" });
+    for (const txnRef of ["NXa", "NXb"]) await reviews.open(PaymentReviewEntity.create({ txnRef, orderId: id, amount: 2000, reason: "PAID_AFTER_RELEASE" }));
     const first = await reviews.list(1);
     assert.equal(first.items.length, 1); assert.ok(first.nextCursor);
     const second = await reviews.list(1, first.nextCursor!);
     assert.equal(second.items.length, 1); assert.notEqual(first.items[0].txnRef, second.items[0].txnRef);
     await assert.rejects(reviews.list(1, "invalid"));
     await reviews.resolve("NXa", "admin-1", "External refund verified", "refund-1");
-    await reviews.open({ txnRef: "NXa", orderId: id, amount: 2000, reason: "PAID_AFTER_RELEASE" });
+    await reviews.open(PaymentReviewEntity.create({ txnRef: "NXa", orderId: id, amount: 2000, reason: "PAID_AFTER_RELEASE" }));
     assert.equal(db.get("PAYMENT_REVIEW#NXa", "DETAIL")?.status, "payment_review_resolved");
   } finally { db.close(); }
 });
@@ -211,9 +213,9 @@ test("manual-review cursor is scoped, paginates and preserves independently reso
 test("a later confirmed payment reopens an unconfirmed review and retains prior operator evidence", async () => {
   const db = transport(rawDb), reviews = new DynamoPaymentReviews();
   try {
-    await reviews.open({ txnRef: "NXtest", orderId: id, amount: 2000, reason: "PROVIDER_UNCONFIRMED" });
+    await reviews.open(PaymentReviewEntity.create({ txnRef: "NXtest", orderId: id, amount: 2000, reason: "PROVIDER_UNCONFIRMED" }));
     await reviews.resolve("NXtest", "admin-1", "No successful payment found at that time", "provider-query-123");
-    await reviews.open({ txnRef: "NXtest", orderId: id, amount: 2000, reason: "PAID_AFTER_RELEASE" });
+    await reviews.open(PaymentReviewEntity.create({ txnRef: "NXtest", orderId: id, amount: 2000, reason: "PAID_AFTER_RELEASE" }));
     const review = db.get("PAYMENT_REVIEW#NXtest", "DETAIL")!;
     assert.equal(review.status, "payment_review_open"); assert.equal(review.reason, "PAID_AFTER_RELEASE");
     assert.equal(review.resolvedBy, undefined);
@@ -224,9 +226,9 @@ test("a later confirmed payment reopens an unconfirmed review and retains prior 
 test("paid-after-release creates one durable review; a failed review write is never acknowledged", async () => {
   const db = transport(rawDb), orders = new DynamoCheckoutOrders(), reviews = new DynamoPaymentReviews();
   try {
-    await orders.hold({ orderId: id, email, items, holdSeconds: 300 });
-    await orders.attachPayment(id, "NXtest", email, "https://gateway.test/pay");
-    await orders.transition({ orderId: id, status: "expired", expiresBefore: new Date(Date.now() + 600000).toISOString() });
+    await holdCheckout(orders, { orderId: id, email, items, holdSeconds: 300 });
+    await attachCheckout(orders, id, "NXtest", email, "https://gateway.test/pay");
+    await transitionCheckout(orders, { orderId: id, status: "expired", expiresBefore: new Date(Date.now() + 600000).toISOString() });
     db.put({ ...pending(), status: "success", PK: "PAYMENT#NXtest", SK: "DETAIL", paidAt: new Date().toISOString() });
     const useCase = new ConfirmOrderPayment(orders, new DurableSettledPayments(), reviews);
     const input = { orderId: id, email, amount: 2000, txnRef: "NXtest" };

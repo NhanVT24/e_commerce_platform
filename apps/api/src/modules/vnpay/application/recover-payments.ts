@@ -1,3 +1,4 @@
+import { PaymentReview } from "../../storefront/domain/payment-review.js";
 import { recoveryLanes } from "./ports/payment-recovery-ports.js";
 import type { PaymentRecoveryQueue, PaymentRecoverySessions, PaymentStatusGateway, CheckoutProvisioning, RecoverablePayment } from "./ports/payment-recovery-ports.js";
 import type { PaymentReviewWriter } from "../../storefront/application/ports/payment-review.js";
@@ -47,14 +48,14 @@ export class RecoverPayments {
             if (outcome.outcome === "confirmed" || outcome.outcome === "already_confirmed") recovered++;
             else throw new Error("Provider result does not match durable session");
           } else if (attempts >= 12 && session.orderId) {
-            await this.reviews.open({ txnRef: id, orderId: session.orderId, amount: session.amount, reason: "PROVIDER_UNCONFIRMED" });
+            await this.reviews.open(PaymentReview.create({ txnRef: id, orderId: session.orderId, amount: session.amount, reason: "PROVIDER_UNCONFIRMED" }));
             this.log.error("payment.provider_unconfirmed_review", { txnRef: id, orderId: session.orderId, attempts });
           }
         } catch (error) {
           failed++;
           if (queried?.orderId && (queried.recoveryAttempts ?? 0) >= 12) {
             try {
-              await this.reviews.open({ txnRef: id, orderId: queried.orderId, amount: queried.amount, reason: "PROVIDER_UNCONFIRMED" });
+              await this.reviews.open(PaymentReview.create({ txnRef: id, orderId: queried.orderId, amount: queried.amount, reason: "PROVIDER_UNCONFIRMED" }));
               this.log.error("payment.provider_unconfirmed_review", { txnRef: id, orderId: queried.orderId, attempts: queried.recoveryAttempts });
             } catch (reviewError) { this.log.error("payment.review_store_failed", { txnRef: id, error: String(reviewError) }); }
           }

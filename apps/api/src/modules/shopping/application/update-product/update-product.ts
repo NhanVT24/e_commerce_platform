@@ -33,7 +33,7 @@ export class UpdateProduct<TResult> {
     const next = current.update(changes);
     const transition = next.stockAlertSince(current);
     const saved = await this.products.update({
-      id: productId, changes, status: next.stockStatus, expectedVersion,
+      product: next, fields: (Object.keys(changes) as (keyof ProductChanges)[]).filter(field => changes[field] !== undefined), expectedVersion,
       expectedOwnerId: actor.isAdmin ? undefined : actor.subject,
       ...(this.delivery === "outbox" ? { inventoryAlert: transition ? { ...transition, source: "admin.update" as const } : undefined, changedBy: actor.subject } : {})
     });

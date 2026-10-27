@@ -1,5 +1,14 @@
 import { BusinessError } from "../../../../common/domain/business-error.js";
 import type { UserAccountStatus } from "./account-status.js";
+import { isProductPermission, type ProductPermission } from "../../../../common/domain/product-permissions.js";
+export class UserPermissionChange {
+    constructor(readonly subject: string, readonly permission: ProductPermission, readonly actor: string) {
+        if (!subject.trim() || !actor.trim() || !isProductPermission(permission)) {
+            throw new BusinessError("INVALID_INPUT", "Invalid user permission change.");
+        }
+        Object.freeze(this);
+    }
+}
 export interface UserAccountSnapshot {
     subject: string;
     status: unknown;

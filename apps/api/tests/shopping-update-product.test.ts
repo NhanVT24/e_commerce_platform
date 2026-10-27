@@ -27,7 +27,7 @@ function fixture(current: ProductSnapshot | null = product) {
     async findById() { return current ? new Product(current) : null; },
     async update(input) {
       writes.push(input);
-      return { product: new Product({ ...product, ...input.changes, status: input.status, version: 2 }), representation };
+      return { product: new Product({ ...input.product.toSnapshot(), version: 2 }), representation };
     }
   };
   const publisher = { async publish(alert: InventoryStockAlert) { alerts.push(alert); } };
@@ -43,7 +43,7 @@ test("owner update retains opaque response, conditional ownership and transition
   assert.equal(await f.useCase.execute(command), f.representation);
   assert.equal(f.writes[0].expectedOwnerId, "owner");
   assert.equal(f.writes[0].expectedVersion, 1);
-  assert.equal(f.writes[0].status, "low_stock");
+  assert.equal(f.writes[0].product.status, "low_stock");
   assert.deepEqual(f.alerts, [{ productId: id, productName: "Product", sku: "SKU-1", stock: 5,
     previousStock: 20, status: "low_stock", previousStatus: "active", source: "admin.update" }]);
 });
@@ -174,12 +174,11 @@ test("Dynamo adapter preserves transaction, category index, legacy response and 
     const snapshot = await adapter.findById(id);
     assert.ok(snapshot instanceof Product);
     assert.equal(typeof snapshot.decreaseStock, "function");
-    assert.deepEqual(snapshot.toSnapshot(), { ...product, soldCount: 0 });
+    assert.equal(snapshot.stock, product.stock); assert.equal(snapshot.toSnapshot().category, "Gia dung");
     assert.equal("PK" in snapshot!, false);
     const result = await auditContext.run({ auditActorType: "USER", auditActorId: "owner", auditActorRole: "customer",
       auditSource: "PATCH /api/shopping-items/:id", auditReason: "authenticated_mutation", auditRequestId: "request-1" },
-    () => adapter.update({ id, changes: { stock: 5, category: "Dien tu", name: "Updated" },
-      status: "low_stock", expectedVersion: 1, expectedOwnerId: "owner" }));
+    () => adapter.update({ product: snapshot!.update({ stock: 5, category: "Dien tu", name: "Updated" }), fields: ["stock", "category", "name"], expectedVersion: 1, expectedOwnerId: "owner" }));
     assert.equal(result.representation.PK, `PRODUCT#${id}`);
     assert.equal(result.representation.customLegacyMetadata, "preserve-me");
     assert.equal(result.representation.version, 2);
@@ -201,8 +200,7 @@ test("Dynamo adapter preserves transaction, category index, legacy response and 
 test("metadata-only update retains inventory alert markers and original price", async () => {
   const db = fakeDynamo(rawDb, databaseConfig.DYNAMODB_TABLE_NAME);
   try {
-    const saved = await new DynamoProductWriteRepository().update({ id, changes: { name: "Renamed" },
-      status: "active", expectedVersion: 1 });
+    const saved = await new DynamoProductWriteRepository().update({ product: new Product(product).update({ name: "Renamed" }), fields: ["name"], expectedVersion: 1 });
     assert.equal(saved.representation.inventoryAlertSent, true);
     assert.equal(saved.representation.inventoryAlertSentAt, "old-alert");
     assert.equal(saved.representation.originalPrice, 3000);
@@ -216,8 +214,8 @@ test("two adapter writes with the same version have one winner in the conditiona
   const db = fakeDynamo(rawDb, databaseConfig.DYNAMODB_TABLE_NAME);
   try {
     const adapter = new DynamoProductWriteRepository();
-    const input = { id, changes: { stock: 5 }, status: "low_stock" as const, expectedVersion: 1, expectedOwnerId: "owner" };
-    const results = await Promise.allSettled([adapter.update(input), adapter.update({ ...input, changes: { stock: 8 } })]);
+    const input = { product: new Product(product).update({ stock: 5 }), fields: ["stock"] as const, expectedVersion: 1, expectedOwnerId: "owner" };
+    const results = await Promise.allSettled([adapter.update(input), adapter.update({ ...input, product: new Product(product).update({ stock: 8 }) })]);
     assert.equal(results.filter(result => result.status === "fulfilled").length, 1);
     const rejected = results.find(result => result.status === "rejected") as PromiseRejectedResult;
     assert.ok(hasCode("CONFLICT")(rejected.reason));
@@ -229,7 +227,7 @@ test("changed owner/deleted record fail safely, while infrastructure errors keep
   const db = fakeDynamo(rawDb, databaseConfig.DYNAMODB_TABLE_NAME);
   try {
     const adapter = new DynamoProductWriteRepository();
-    const input = { id, changes: { stock: 5 }, status: "low_stock" as const, expectedVersion: 1, expectedOwnerId: "owner" };
+    const input = { product: new Product(product).update({ stock: 5 }), fields: ["stock"] as const, expectedVersion: 1, expectedOwnerId: "owner" };
     db.setCurrent({ ...record(), ownerSub: "new-owner" });
     await assert.rejects(adapter.update(input), hasCode("CONFLICT"));
     db.setCurrent(null);

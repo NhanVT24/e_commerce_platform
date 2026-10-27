@@ -22,7 +22,7 @@ test("update/counter hand off alert before committing and never call the direct 
   let alert: unknown;
   const update = new UpdateProduct({ async findById() { return product; }, async update(input) {
     alert = input.inventoryAlert; assert.equal(input.changedBy, "owner");
-    return { product: product.update(input.changes), representation: "saved" };
+    return { product: input.product, representation: "saved" };
   } }, publisher);
   assert.equal(await update.execute({ productId: "product", changes: { stock: 5 }, expectedVersion: 1, actor }), "saved");
   assert.equal((alert as { status: string }).status, "low_stock");
@@ -77,12 +77,12 @@ test("a competing claim is skipped; an expired last attempt is failed without an
 function notificationFixture() {
   const receipts = new Map<string, { effects?: InventoryEffects }>();
   let creates = 0, calls = 0, finishFailure = false, snsFailure = false;
-  const effects: NotificationEffects = {
+  const effects: NotificationEffects = { newId: () => "test-notification",
     store: {} as NotificationEffects["store"], async findCheckout() { return null; },
     async publish(input) { calls++; assert.equal(input.source, "supermarket.platform"); return { eventId: "bus-id", eventBusName: "bus" }; },
     async adminAlert() { calls++; if (snsFailure) throw new Error("timeout"); return { messageId: "sns-id", topicArn: "topic" }; },
     async orderConfirmation() { throw new Error("unexpected"); }, async paymentFailure() { throw new Error("unexpected"); },
-    inventory: {
+    inventory: { notificationId: () => "notification",
       async createOnce(input) {
         const created = !receipts.has(input.eventId);
         if (created) { creates++; receipts.set(input.eventId, {}); }

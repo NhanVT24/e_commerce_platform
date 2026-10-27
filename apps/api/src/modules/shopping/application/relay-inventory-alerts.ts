@@ -1,4 +1,5 @@
 import type { InventoryAlertOutbox, DurableInventoryAlertPublisher } from "./ports/inventory-alert-outbox.js";
+import { InventoryAlertDelivery } from "../domain/inventory-alert-delivery.js";
 
 /** Publishes at least once. A lost publish/marker response reuses the SAME event ID. */
 export class RelayInventoryAlerts {
@@ -18,7 +19,7 @@ export class RelayInventoryAlerts {
       claimed++;
       try {
         // An expired last-attempt lease must not result in an unbounded ninth send.
-        if (candidate.attempts >= this.config.maxAttempts) {
+        if (new InventoryAlertDelivery(candidate).exhausted(this.config.maxAttempts)) {
           const changed = await this.store.retry(claim, new Date(this.now()).toISOString(), new Date(this.now()).toISOString(), true);
           if (changed) failed++; else lostLease++;
           continue;
@@ -27,10 +28,10 @@ export class RelayInventoryAlerts {
         if (await this.store.published(claim, new Date(this.now()).toISOString())) published++;
         else lostLease++;
       } catch {
-        const exhausted = claim.attempts >= this.config.maxAttempts;
-        const delay = Math.min(900_000, 10_000 * 2 ** Math.min(claim.attempts - 1, 10));
+        const delivery = new InventoryAlertDelivery(claim);
+        const exhausted = delivery.exhausted(this.config.maxAttempts);
         const now = this.now();
-        if (await this.store.retry(claim, new Date(now).toISOString(), new Date(now + delay).toISOString(), exhausted)) {
+        if (await this.store.retry(claim, new Date(now).toISOString(), delivery.nextRetryAt(now), exhausted)) {
           if (exhausted) failed++; else retry++;
         } else lostLease++;
       }

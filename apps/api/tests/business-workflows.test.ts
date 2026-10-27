@@ -62,7 +62,7 @@ test("profile update sends only changed fields and returns the saved profile pro
   const writes: unknown[] = [];
   const profiles: ProfileRepository = {
     async find() { return { displayName: "New name", avatarKey: "public/avatars/user/a.png", addresses: [] }; },
-    async update(subject, patch) { assert.equal(subject, "user"); writes.push(patch); }
+    async update(change) { assert.equal(change.subject, "user"); writes.push(change.toSnapshot()); }
   };
   const avatars = { async exists() { assert.fail("Name-only update must not check avatar storage"); }, publicUrl(key: string) { return `cdn/${key}`; } };
   const result = await new UpdateProfile(profiles, avatars, new ProfileQueries(profiles, avatars)).execute("user", { displayName: "New name" });
@@ -77,10 +77,10 @@ function salesFixture() {
     startAt: "2026-10-22T00:02:00Z", endAt: "2026-10-23T00:00:00Z", startScheduleName: "sale-start-sale", endScheduleName: "sale-end-sale", version: 1, createdAt: "now", updatedAt: "now" };
   const store: CampaignStore = {
     async listSaleCampaigns() { return [campaign]; }, async listActiveSaleCampaigns() { return []; }, async getSaleCampaign() { return campaign; },
-    async createSaleCampaign(input) { calls.push("persist"); return { ...input, version: 1, createdAt: "now", updatedAt: "now" }; },
-    async cancelSaleCampaign() { calls.push("cancel"); }, async transitionSaleCampaign(_id, from, to) { calls.push(`${from}->${to}`); },
+    async createSaleCampaign(input) { calls.push("persist"); return input.toSnapshot(); },
+    async cancelSaleCampaign() { calls.push("cancel"); }, async transitionSaleCampaign(entity, from) { calls.push(`${from}->${entity.toSnapshot().campaignStatus}`); },
     async closeSaleCampaignBecauseEmpty() { calls.push("close"); return { ...campaign, productIds: [] }; },
-    async updateSaleCampaignProducts(input) { calls.push("update"); assert.equal(input.expectedVersion, 1); return { ...campaign, productIds: input.productIds, version: 2 }; }
+    async updateSaleCampaignProducts(input) { calls.push("update"); assert.equal(input.expectedVersion, 1); return { ...campaign, productIds: input.campaign.toSnapshot().productIds, version: 2 }; }
   };
   const products = { async find(id: string): Promise<{ id: string } | null> { return { id }; } };
   const schedules: CampaignSchedules = { assertReady() { calls.push("ready"); },
@@ -135,12 +135,12 @@ test("sale schedule ignores missing campaign and unknown action without transiti
 
 function inventoryFixture() {
   const events: string[] = [];
-  const ports: InventoryReportPorts = {
+  const ports: InventoryReportPorts = { newId: () => "report-email",
     async listInventoryReportProducts() { events.push("list"); return [
       { id: "low", name: "Low", stock: 5, status: "low_stock", updatedAt: "now", inventoryAlertSent: false },
       { id: "out", name: "Out", stock: 0, status: "out_of_stock", updatedAt: "now", inventoryAlertSent: false }
     ]; },
-    async createPendingInventoryReport(input) { events.push("claim"); assert.equal(input.lowStockCount, 1); assert.equal(input.outOfStockCount, 1); },
+    async createPendingInventoryReport(input) { events.push("claim"); assert.equal(input.toSnapshot().lowStockCount, 1); assert.equal(input.toSnapshot().outOfStockCount, 1); },
     async createPendingEmailDelivery() { events.push("email"); return { id: "mail" }; },
     async sendInventoryDigestEmail(input) { events.push("send"); assert.equal(input.lowStockProducts[0].id, "low"); assert.equal(input.outOfStockProducts[0].id, "out"); return "ses-message"; },
     async markInventoryReportAccepted() { events.push("report:accepted"); return true; }, async markEmailDeliveryAccepted() { events.push("email:accepted"); return true; },

@@ -8,7 +8,7 @@ const event = ({ channel: _channel, ...input }: MailEvent) => ({ ...input, busNa
 export const emailAdministrationPorts: EmailAdministrationPorts = {
     getEmailDelivery: deliveries.getEmailDelivery, listEmailDeliveriesWithStatus: deliveries.listEmailDeliveriesWithStatus,
     listFailedEmailRoutePublishes: routes.listFailedEmailRoutePublishes, retryFailedEmailRoutePublish: routes.retryFailedEmailRoutePublish,
-    ensureEmailRoute: input => routes.ensureEmailRoute({ ...input, event: event(input.event) }),
+    ensureEmailRoute: route => routes.ensureEmailRoute(route, eventbridgeConfig.EVENTBRIDGE_PLATFORM_BUS_NAME),
     markEmailRoutePublished: routes.markEmailRoutePublished, markEmailRoutePublishRetry: routes.markEmailRoutePublishRetry,
     nextEmailPublishRetryAt, publishEventBridgeEvent: input => publishEventBridgeEvent(event(input))
 };

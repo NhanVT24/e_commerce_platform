@@ -1,8 +1,12 @@
-import { createProductRecord } from "./infrastructure/persistence/dynamo-product-creator.js";
-import { incrementProductRecord } from "./infrastructure/persistence/dynamo-product-counter-repository.js";
-import { deleteProductRecord } from "./infrastructure/persistence/dynamo-product-deleter.js";
+import { DynamoProductCreator } from "./infrastructure/persistence/dynamo-product-creator.js";
+import { DynamoProductCounterRepository } from "./infrastructure/persistence/dynamo-product-counter-repository.js";
+import { DynamoProductDeleter } from "./infrastructure/persistence/dynamo-product-deleter.js";
 import { normalizeText } from "./infrastructure/persistence/product.mapper.js";
-import { updateProductRecord } from "./infrastructure/persistence/dynamo-product-write-repository.js";
+import { DynamoProductWriteRepository } from "./infrastructure/persistence/dynamo-product-write-repository.js";
+import { Product, type ProductChanges } from "./domain/product.js";
+import { createShoppingItemSchema } from "./shopping.schema.js";
+import { missingProductConflict } from "./infrastructure/persistence/product-record.store.js";
+import { randomUUID } from "node:crypto";
 import {
   GetItemCommand,
   QueryCommand,
@@ -441,7 +445,11 @@ async function querySearchUntilEnough(limit: number, cursor?: string, filters: S
 
 // Compatibility for seed scripts; HTTP mutations use application use cases.
 export async function createShoppingItem(input: ProductRecord, ownerSub: string) {
-  return createProductRecord(input, ownerSub);
+  const details = createShoppingItemSchema.parse(input);
+  if (!details.category) throw new Error("Product category is required");
+  const product = Product.create(randomUUID(), ownerSub, { ...details, category: details.category });
+  const timestamp = new Date().toISOString();
+  return new DynamoProductCreator().create({ product, createdAt: timestamp, updatedAt: timestamp });
 }
 
 export async function getShoppingItem(id: string) {
@@ -455,7 +463,12 @@ export async function getShoppingItem(id: string) {
 }
 
 export async function incrementItemValue(id: string, field: string, incrementBy = 1, expectedOwnerSub?: string) {
-  return incrementProductRecord(id, field, incrementBy, expectedOwnerSub);
+  if (field !== "stock" && field !== "soldCount") throw new Error(`Field "${field}" is not allowed for increment.`);
+  const repository = new DynamoProductCounterRepository();
+  const current = await repository.findById(id);
+  if (!current) throw missingProductConflict();
+  return (await repository.increment({ product: current.adjustCounter(field, incrementBy), field, incrementBy,
+    expectedVersion: current.version, expectedOwnerId: expectedOwnerSub })).representation;
 }
 
 export async function listShoppingItems(limit = 12, cursor?: string, filters: ShoppingFilters = {}) {
@@ -665,10 +678,18 @@ async function listAllShoppingItemsBase(pageLimit = 50, maxPages = 20, filters: 
 // Compatibility entry point for maintenance scripts; the HTTP update uses
 // UpdateProduct and the typed adapter. Keep one implementation of the transaction.
 export async function updateShoppingItem(id: string, patch: ProductRecord, version: number, expectedOwnerSub?: string) {
-  return updateProductRecord(id, patch, version, expectedOwnerSub);
+  const repository = new DynamoProductWriteRepository();
+  const current = await repository.findById(id);
+  if (!current) throw missingProductConflict();
+  current.assertVersion(version);
+  return (await repository.update({ product: current.update(patch), fields: Object.keys(patch) as (keyof ProductChanges)[],
+    expectedVersion: version, expectedOwnerId: expectedOwnerSub })).representation;
 }
 
 // Compatibility for reseed scripts and audit callers.
 export async function deleteShoppingItem(id: string, expectedOwnerSub?: string) {
-  return deleteProductRecord(id, expectedOwnerSub);
+  const repository = new DynamoProductDeleter();
+  const product = await repository.findById(id);
+  if (!product) throw missingProductConflict();
+  return repository.delete({ product, expectedOwnerId: expectedOwnerSub });
 }

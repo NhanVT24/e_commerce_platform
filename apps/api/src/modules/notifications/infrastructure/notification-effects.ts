@@ -1,4 +1,5 @@
 import { DynamoInventoryNotifications } from "./inventory-notifications.js";
+import { randomUUID } from "node:crypto";
 import type { NotificationEffects, NotificationConfig } from "../application/ports.js";
 import { emailConfig } from "../../../config/email-config.js";
 import { eventbridgeConfig } from "../../../config/eventbridge-config.js";
@@ -13,6 +14,7 @@ export const notificationConfig = (): NotificationConfig => ({ platformEventsEna
     paymentEventsEnabled: Boolean(eventbridgeConfig.EVENTBRIDGE_PAYMENT_BUS_NAME), commerceEventsEnabled: Boolean(eventbridgeConfig.EVENTBRIDGE_COMMERCE_BUS_NAME),
     adminAlertsEnabled: Boolean(operationsConfig.SNS_ADMIN_ALERTS_TOPIC_ARN), adminEmail: emailConfig.ADMIN_REPORT_EMAIL });
 export const notificationEffects: NotificationEffects = {
+    newId: randomUUID,
     inventory: new DynamoInventoryNotifications(),
     store: { createNotification: store.createNotification, deleteNotification: store.deleteNotification, deleteNotifications: store.deleteNotifications,
         listAllNotifications: store.listAllNotifications, listNotificationsByCustomer: store.listNotificationsByCustomer,

@@ -12,7 +12,7 @@ export class DeleteProduct {
     const current = await this.products.findById(productId);
     assertCanManageProduct(current, actor);
     current.assertValidState();
-    await this.products.delete({ id: productId, expectedVersion: current.version,
+    await this.products.delete({ product: current,
       expectedOwnerId: actor.isAdmin ? undefined : actor.subject });
   }
 }

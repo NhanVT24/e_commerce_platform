@@ -45,7 +45,7 @@ test("authorization cannot self-block and never writes for a missing directory u
   const store: AuthorizationStore = {
     async getUserPermissions() { return []; }, async getUserProfileSummary() { return { accountStatus: "ACTIVE", lastLoginAt: "", displayName: "", addresses: [] }; },
     async addUserPermission() { writes++; return []; }, async removeUserPermission() { writes++; return []; },
-    async updateUserAccountStatus(_subject, status) { writes++; return status; }, async updateUserAddresses(_subject, addresses) { writes++; return addresses; }
+    async updateUserAccountStatus(account) { writes++; return account.status; }, async updateUserAddresses(change) { writes++; return change.toSnapshot().addresses ?? []; }
   };
   const flow = new AuthorizationUseCases({ async listUsers() { return [{ subject: "self", username: "u", email: "u@example.test", displayName: "User" }]; } }, store);
   await assert.rejects(flow.updateAccountStatus("self", "BLOCKED", "self"), { code: "INVALID_INPUT" });
@@ -95,7 +95,7 @@ function saleFixture() {
   const campaign: SaleCampaign = { id: "sale", name: "Sale", campaignStatus: "active", discountPercent: 10, productIds: ["p"], startAt: "2026-10-22T00:00:00Z", endAt: "2026-10-23T00:00:00Z",
     startScheduleName: "start", endScheduleName: "end", version: 1, createdAt: "", updatedAt: "" };
   const store: CampaignStore = { async listSaleCampaigns() { return [campaign]; }, async listActiveSaleCampaigns() { return [campaign]; }, async getSaleCampaign() { return campaign; },
-    async createSaleCampaign() { calls.push("persist"); return campaign; }, async cancelSaleCampaign() { calls.push("cancel"); }, async transitionSaleCampaign() {},
+    async createSaleCampaign(entity) { calls.push("persist"); return entity.toSnapshot(); }, async cancelSaleCampaign() { calls.push("cancel"); }, async transitionSaleCampaign() {},
     async closeSaleCampaignBecauseEmpty() { calls.push("close"); return { ...campaign, productIds: [] }; }, async updateSaleCampaignProducts() { return campaign; } };
   const schedules: CampaignSchedules = { assertReady() {}, async create(_id, action) { calls.push(`create:${action}`); }, async delete(name) { calls.push(`delete:${name}`); } };
   return { store, schedules, calls, campaign, flow: new SalesUseCases(store, { async find() { return {}; } }, schedules, () => "sale", () => now) };
@@ -244,7 +244,7 @@ test("DLQ selective replay releases unselected/failed messages and acknowledges 
 
 test("inventory report claim deduplicates before SES and does not mark products when sending fails", async () => {
   const calls: string[] = []; let duplicate = true;
-  const ports: InventoryReportPorts = {
+  const ports: InventoryReportPorts = { newId: () => "report-email",
     async listInventoryReportProducts() { return [{ id: "p", name: "Product", stock: 1, status: "low_stock", updatedAt: "now", inventoryAlertSent: false }]; },
     async markInventoryReportProductsAlerted() { calls.push("products"); return 1; }, async createPendingInventoryReport() { if (duplicate) throw new ApplicationError("CONFLICT", "claimed"); },
     async markInventoryReportAccepted() { return true; }, async markInventoryReportFailed() { calls.push("report failed"); },

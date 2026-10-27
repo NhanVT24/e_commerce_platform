@@ -1,6 +1,5 @@
 import { Order } from "../../domain/order.js";
 import { isRefundEligible, refundResponse } from "../../domain/order-refund.js";
-import type { RefundOrder } from "../../domain/order-refund.js";
 import type { RefundGateway, RefundOrderRepository, OrderOperationLogger, RefundOutcome } from "../ports/order-lifecycle-ports.js";
 import { OrderActionError } from "../order-action.error.js";
 import { assertOwnedOrder } from "../order-access.js";
@@ -24,15 +23,15 @@ export class RequestRefund {
       throw new OrderActionError("CONFLICT", "Refund is available for 5 minutes after confirmed payment.");
     }
     const payment = await this.gateway.findPayment(order.paymentTxnRef!);
-    if (!new Order(order).matchesRefundPayment(payment)) {
+    if (!order.matchesRefundPayment(payment)) {
       throw new OrderActionError("CONFLICT", "Payment details are not ready for refund.");
     }
     this.gateway.assertReady();
     const requestId = this.newRequestId();
     const claimTime = this.now();
-    const claimed = new Order(order).claimRefund(requestId, claimTime).toSnapshot();
+    const claimed = order.claimRefund(requestId, claimTime);
     try {
-      await this.orders.claim({ orderId, customerEmail: email, paymentConfirmedAt: order.paymentConfirmedAt!, requestId, now: claimTime });
+      await this.orders.claim({ order: claimed, now: claimTime });
     } catch (error) {
       if (error instanceof OrderActionError && error.code === "CONFLICT") {
         throw new OrderActionError("CONFLICT", "Refund already requested or order changed.");
@@ -56,9 +55,9 @@ export class RequestRefund {
     }
   }
 
-  private async pendingResponse(claimed: RefundOrder, notify: boolean) {
+  private async pendingResponse(claimed: Order, notify: boolean) {
     const current = await this.orders.findById(claimed.id);
-    const known = current ?? { ...claimed, refundStatus: "unknown" };
+    const known = current ?? new Order({ ...claimed, refundStatus: "unknown" });
     if (notify && known.status === "refund_pending") await this.resolution.notify(known, "refund_pending");
     return refundResponse(known);
   }

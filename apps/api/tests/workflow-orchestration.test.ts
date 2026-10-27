@@ -13,6 +13,7 @@ import { CleanupData, type CleanupStore } from "../src/modules/data-cleanup/appl
 function workflowFixture() {
   const f = checkoutFixture();
   f.order.paymentTxnRef = undefined;
+  f.newOrderRequest();
   const effects: OrderFinalizationEffects = {
     async succeeded() { assert.fail("Checkout must not finalize inventory before confirmed payment"); },
     async failed(email, items, requestId, reason) {
@@ -57,7 +58,7 @@ test("checkout workflow rejects a missing stable identity before any write", asy
 
 test("checkout workflow converts only insufficient stock into a business failure", async () => {
   const f = workflowFixture();
-  f.orders.hold = async () => { throw new InsufficientOrderStock("Sold out"); };
+  f.orders.create = async () => { throw new InsufficientOrderStock("Sold out"); };
   const result = await f.execute();
   assert.equal(result.outcome, "failed");
   assert.equal(result.orderId, "");
@@ -66,14 +67,14 @@ test("checkout workflow converts only insufficient stock into a business failure
 
 test("checkout workflow propagates storage errors without reporting an out-of-stock outcome", async () => {
   const f = workflowFixture(), failure = new Error("database unavailable");
-  f.orders.hold = async () => { throw failure; };
+  f.orders.create = async () => { throw failure; };
   await assert.rejects(f.execute(), error => error === failure);
   assert.deepEqual(f.events, []);
 });
 
 test("checkout workflow does not acknowledge an undelivered failure effect", async () => {
   const f = workflowFixture(), failure = new Error("failure event unavailable");
-  f.orders.hold = async () => { throw new InsufficientOrderStock("Sold out"); };
+  f.orders.create = async () => { throw new InsufficientOrderStock("Sold out"); };
   f.effects.failed = async () => { throw failure; };
   await assert.rejects(f.execute(), error => error === failure);
 });

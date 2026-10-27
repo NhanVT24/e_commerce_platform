@@ -8,7 +8,8 @@ import { rawDb } from "../../../../database/dynamodb/client.js";
 import { keys } from "../../../../database/dynamodb/keys.js";
 import { ApplicationError } from "../../../../common/application/application-error.js";
 import { normalizeAddresses } from "../user-address.js";
-import type { ProfileRepository, ProfileAvatars, ProfilePatch } from "../application/profile.js";
+import type { ProfileRepository, ProfileAvatars } from "../application/profile.js";
+import type { ProfileChange } from "../domain/user-profile.js";
 export class DynamoProfiles implements ProfileRepository {
     async find(subject: string) {
         const result = await rawDb.send(new GetItemCommand({ TableName: databaseConfig.DYNAMODB_TABLE_NAME,
@@ -17,7 +18,10 @@ export class DynamoProfiles implements ProfileRepository {
         return { displayName: typeof row.displayName === "string" ? row.displayName : "",
             avatarKey: typeof row.avatarKey === "string" ? row.avatarKey : "", addresses: normalizeAddresses(row.addresses) };
     }
-    async update(subject: string, patch: ProfilePatch) {
+    async update(change: ProfileChange) {
+        change.assertAllowed();
+        const subject = change.subject;
+        const patch = change.toSnapshot();
         const names: Record<string, string> = { "#updatedAt": "updatedAt", "#entityType": "entityType" };
         const values: Record<string, unknown> = { ":updatedAt": new Date().toISOString(), ":entityType": "USER_PROFILE" };
         const changes = ["#updatedAt = :updatedAt"];
