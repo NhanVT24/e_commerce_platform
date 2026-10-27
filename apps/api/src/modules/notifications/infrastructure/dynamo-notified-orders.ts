@@ -4,11 +4,12 @@ import { rawDb } from "../../../database/dynamodb/client.js";
 import { databaseConfig } from "../../../config/database-config.js";
 import type { NotifiedOrders } from "../application/complete-notified-order.js";
 import { getOrderById } from "../../storefront/infrastructure/persistence/storefront.store.js";
+import { toLegacyOrder } from "../../storefront/infrastructure/persistence/order.mapper.js";
 
 export class DynamoNotifiedOrders implements NotifiedOrders {
   async findById(id: string) {
     const row = await getOrderById(id);
-    return row ? { customerEmail: row.customerEmail, status: row.status } : null;
+    return row ? toLegacyOrder(row) : null;
   }
   async hasSentSystemNotification(orderId: string, email: string) {
     let cursor: Record<string, AttributeValue> | undefined;
@@ -28,7 +29,7 @@ export class DynamoNotifiedOrders implements NotifiedOrders {
     return false;
   }
   async completePending(entity: Parameters<NotifiedOrders["completePending"]>[0]) {
-    const { id, status } = entity.toSnapshot();
+    const { id, status } = entity;
     if (status !== "done") throw new Error("Expected a completed order entity");
     const now = new Date().toISOString();
     try {

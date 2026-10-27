@@ -14,9 +14,9 @@ export class FinalizeOrder {
     try {
       let entity = await this.orders.findExisting(requestId);
       if (entity) {
-        const snapshot = entity.toSnapshot();
-        if (!entity.isOwnedBy(email) || snapshot.items.length !== normalized.length ||
-            !normalized.every(item => snapshot.items.some(line => line.productId === item.productId && line.quantity === item.quantity))) {
+        const orderData = entity;
+        if (!entity.isOwnedBy(email) || orderData.items.length !== normalized.length ||
+            !normalized.every(item => orderData.items.some(line => line.productId === item.productId && line.quantity === item.quantity))) {
           throw new OrderActionError("CONFLICT", "Order request identity does not match.");
         }
       } else {

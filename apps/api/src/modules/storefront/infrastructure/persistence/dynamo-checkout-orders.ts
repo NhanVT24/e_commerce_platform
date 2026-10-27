@@ -2,49 +2,34 @@ import { QueryCommand, type AttributeValue } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { rawDb } from "../../../../database/dynamodb/client.js";
 import { databaseConfig } from "../../../../config/database-config.js";
-import type { CheckoutOrders, HeldOrder, CheckoutLine } from "../../application/ports/checkout-ports.js";
+import type { CheckoutOrders } from "../../application/ports/checkout-ports.js";
 import { persistAwaitingPaymentOrder, readCheckoutPrices, attachPaymentTxnRef, transitionAwaitingPaymentOrder } from "./storefront.store.js";
 import { getAwaitingPaymentOrder } from "./order-record.store.js";
 import { listOrderItems } from "./order-record.store.js";
 import { OrderActionError } from "../../application/order-action.error.js";
 import { InsufficientOrderStock } from "../../application/ports/order-finalization-ports.js";
 import { getPaymentSessionByTxnRef } from "../../../vnpay/vnpay.repository.js";
-import { Order } from "../../domain/order.js";
-
-const toOrder = (order: Awaited<ReturnType<typeof getAwaitingPaymentOrder>>): HeldOrder => ({
-  id: order.PK.replace(/^ORDER#/, ""), customerEmail: order.customerEmail, status: order.status,
-  totalAmount: order.totalAmount, lockedUntil: order.lockedUntil, paymentTxnRef: order.paymentTxnRef, paymentUrl: order.paymentUrl,
-  paymentConfirmedAt: order.paymentConfirmedAt });
-const toLines = (rows: Awaited<ReturnType<typeof listOrderItems>>): CheckoutLine[] => rows.map(row => ({
-  productId: row.productId, productName: row.productName, quantity: row.quantity,
-  unitPrice: row.unitPrice, originalUnitPrice: row.originalUnitPrice, lineTotal: row.lineTotal
-}));
+import { toCheckoutOrder } from "./order.mapper.js";
 
 export class DynamoCheckoutOrders implements CheckoutOrders {
   loadPrices = readCheckoutPrices;
-  async findForReplay(id: string) {
-    const record = await getAwaitingPaymentOrder(id);
-    if (!record) return null;
-    const items = toLines(await listOrderItems(id));
-    return new Order({ ...toOrder(record), items });
-  }
-  async hold(entity: Parameters<CheckoutOrders["hold"]>[0]) {
-    const snapshot = entity.toSnapshot();
+  async create(entity: Parameters<CheckoutOrders["create"]>[0]) {
+    const orderData = entity;
     // Session+link are now committed atomically. Unattached holds can be resumed
     // safely; concurrent issuers compete on the order condition in that transaction.
     const replay = async () => {
-      const existing = await getAwaitingPaymentOrder(snapshot.id);
+      const existing = await getAwaitingPaymentOrder(orderData.id);
       if (!existing) return null;
-      const lines = toLines(await listOrderItems(snapshot.id));
-      const order = new Order({ ...toOrder(existing), items: lines });
-      order.assertCheckoutReplay(snapshot.customerEmail, snapshot.items, lines, new Date().toISOString());
+      const lines = await listOrderItems(orderData.id);
+      const order = toCheckoutOrder(existing, lines);
+      order.assertCheckoutReplay(orderData.customerEmail, orderData.items, lines, new Date().toISOString());
       return order;
     };
     const existing = await replay();
     if (existing) return existing;
     try {
       const result = await persistAwaitingPaymentOrder(entity);
-      return new Order({ ...toOrder(result.order), items: toLines(result.items) });
+      return toCheckoutOrder(result.order, result.items);
     } catch (error) {
       const failure = error as { name?: string; CancellationReasons?: Array<{ Code?: string }> };
       if ((error instanceof OrderActionError && error.code === "CONFLICT") ||
@@ -60,18 +45,21 @@ export class DynamoCheckoutOrders implements CheckoutOrders {
       throw error;
     }
   }
-  async findById(id: string) { const order = await getAwaitingPaymentOrder(id); return order ? toOrder(order) : null; }
+  async findById(id: string) {
+    const record = await getAwaitingPaymentOrder(id);
+    return record ? toCheckoutOrder(record, await listOrderItems(id)) : null;
+  }
   async attachPayment(entity: Parameters<CheckoutOrders["attachPayment"]>[0]) {
-    const order = entity.toSnapshot();
+    const order = entity;
     if (!order.paymentTxnRef || !order.paymentUrl) throw new OrderActionError("INVALID_INPUT", "Order has no payment linkage.");
     await attachPaymentTxnRef(order.id, order.paymentTxnRef, order.customerEmail, order.paymentUrl);
   }
   async transition(change: Parameters<CheckoutOrders["transition"]>[0]) {
     const { order: entity, ...context } = change;
-    const input = { ...context, orderId: entity.toSnapshot().id };
+    const input = { ...context, orderId: entity.id };
     try {
       const result = await transitionAwaitingPaymentOrder(input);
-      return { ...result, order: toOrder(result.order) };
+      return { ...result, order: toCheckoutOrder(result.order, result.items) };
     } catch (error) {
       const failure = error as { name?: string; CancellationReasons?: Array<{ Code?: string }> };
       if (failure?.name !== "TransactionCanceledException") throw error;
@@ -80,7 +68,7 @@ export class DynamoCheckoutOrders implements CheckoutOrders {
         const current = await this.findById(input.orderId);
         if (current && current.status !== "awaiting_payment") {
           const result = await transitionAwaitingPaymentOrder(input);
-          return { ...result, order: toOrder(result.order) };
+          return { ...result, order: toCheckoutOrder(result.order, result.items) };
         }
       }
       // A paid session won against expiry; inventory remains held for its worker.

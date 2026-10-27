@@ -1,20 +1,21 @@
 import { transitionAwaitingPaymentOrder } from "./storefront.store.js";
 import { getAwaitingPaymentOrder } from "./order-record.store.js";
-import { toRefundOrder } from "./dynamo-refund-orders.js";
+import { toCheckoutOrder } from "./order.mapper.js";
+import { listOrderItems } from "./order-record.store.js";
 import type { OrderCancellationRepository } from "../../application/ports/order-lifecycle-ports.js";
 import { OrderActionError } from "../../application/order-action.error.js";
 
 export class DynamoOrderCancellation implements OrderCancellationRepository {
   async findById(id: string) {
     const record = await getAwaitingPaymentOrder(id);
-    return record ? toRefundOrder(record) : null;
+    return record ? toCheckoutOrder(record, await listOrderItems(id)) : null;
   }
 
   async cancel(entity: Parameters<OrderCancellationRepository["cancel"]>[0]) {
-    const { id: orderId, customerEmail } = entity.toSnapshot();
+    const { id: orderId, customerEmail } = entity;
     try {
       const result = await transitionAwaitingPaymentOrder({ orderId, expectedCustomerEmail: customerEmail, status: "cancelled" });
-      return { order: toRefundOrder(result.order), changed: result.changed };
+      return { order: toCheckoutOrder(result.order, result.items), changed: result.changed };
     } catch (error) {
       const failure = error as { name?: string; CancellationReasons?: Array<{ Code?: string }> };
       const competingTransition = failure?.name === "TransactionCanceledException" &&

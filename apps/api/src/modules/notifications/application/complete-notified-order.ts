@@ -1,5 +1,5 @@
 export interface NotifiedOrders {
-  findById(id: string): Promise<{ customerEmail: string; status: string } | null>;
+  findById(id: string): Promise<Order | null>;
   hasSentSystemNotification(orderId: string, customerEmail: string): Promise<boolean>;
   /** Conditional pending -> done and its status audit must commit atomically. */
   completePending(order: Order): Promise<boolean>;
@@ -11,7 +11,7 @@ export class CompleteNotifiedOrder {
   async execute(id: string) {
     const order = await this.orders.findById(id);
     if (!order) return { changed: false, completed: false };
-    const entity = new Order({ id, ...order });
+    const entity = order;
     if (!entity.isAwaitingLegacyCompletion) return { changed: false, completed: entity.isLegacyCompleted };
     if (!entity.canCompleteLegacyNotification(await this.orders.hasSentSystemNotification(id, order.customerEmail))) return { changed: false, completed: false };
     return { changed: await this.orders.completePending(entity.completeLegacyAfterNotification(true)), completed: true };

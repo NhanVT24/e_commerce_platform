@@ -5,7 +5,7 @@ import { normalizeCheckoutItems } from "../../application/checkout-items.js";
 import { OrderActionError } from "../../application/order-action.error.js";
 import { getAwaitingPaymentOrder, listOrderItems } from "./order-record.store.js";
 import type { OrderLifecycleStatus } from "../../domain/order-refund.js";
-import { Order, type CheckoutProductPrice, type LegacyOrderSnapshot } from "../../domain/order.js";
+import { Order, type CheckoutProductPrice } from "../../domain/order.js";
 import { toProduct } from "../../../shopping/infrastructure/persistence/product.mapper.js";
 export { getAwaitingPaymentOrder, listOrderItems } from "./order-record.store.js";
 import crypto from "node:crypto";
@@ -161,7 +161,7 @@ function buildOrderItemKey(orderId: string, productId: string) {
   return { PK: `ORDER#${orderId}`, SK: `ORDER_ITEM#${productId}` };
 }
 
-export async function createStorefrontOrder(input: CreateOrderPayload, prepared?: Order<LegacyOrderSnapshot>): Promise<StorefrontOrderCreationResult> {
+export async function createStorefrontOrder(input: CreateOrderPayload, prepared?: Order): Promise<StorefrontOrderCreationResult> {
   const normalizedItems = normalizeCheckoutItems(input.items);
   const now = new Date().toISOString();
   const orderId = input.requestId || crypto.randomUUID();
@@ -175,7 +175,7 @@ export async function createStorefrontOrder(input: CreateOrderPayload, prepared?
   const productSnapshots = new Map<string, Record<string, any>>();
   const entity = prepared ?? Order.createLegacy({ id: orderId, customerEmail: input.email, items: normalizedItems,
     products: await readCheckoutPrices(normalizedItems), now: Date.now(), holdSeconds: 300 });
-  const snapshot = entity.toSnapshot();
+  const orderData = entity;
 
   for (const item of normalizedItems) {
     const product = await readProductRecord(item.productId);
@@ -188,22 +188,23 @@ export async function createStorefrontOrder(input: CreateOrderPayload, prepared?
       throw new Error(`Insufficient stock for ${product.name}`);
     }
 
-    if (Number(product.version ?? 0) !== snapshot.items.find(line => line.productId === item.productId)?.version) {
+    if (Number(product.version ?? 0) !== orderData.items.find(line => line.productId === item.productId)?.version) {
       throw new OrderActionError("CONFLICT", "Product inventory changed during checkout");
     }
     productSnapshots.set(item.productId, product);
   }
+  if (orderData.status !== "pending") throw new OrderActionError("INVALID_INPUT", "Expected a new queued order.");
   const orderRecord: StorefrontOrderRecord = {
     PK: `ORDER#${orderId}`,
     SK: "DETAIL",
     entityType: "ORDER",
     id: orderId,
     customerEmail: input.email,
-    status: snapshot.status,
-    items: snapshot.items.map(({ version: _version, ...line }) => line),
-    totalAmount: snapshot.totalAmount,
-    createdAt: snapshot.createdAt,
-    updatedAt: snapshot.updatedAt
+    status: orderData.status,
+    items: orderData.items.map(line => ({ productId: line.productId, productName: line.productName, quantity: line.quantity, price: line.unitPrice, lineTotal: line.lineTotal })),
+    totalAmount: orderData.totalAmount,
+    createdAt: orderData.createdAt,
+    updatedAt: orderData.updatedAt
   };
   try {
     await rawDb.send(new TransactWriteItemsCommand({
@@ -297,39 +298,40 @@ export async function createAwaitingPaymentOrder(input: {
     bankCode: input.bankCode, locale: input.locale }));
 }
 
-export async function persistAwaitingPaymentOrder(entity: Order<import('../../domain/order.js').NewCheckoutOrder>) {
-  const snapshot = entity.toSnapshot();
-  const now = snapshot.createdAt;
-  const normalizedItems = snapshot.items;
+export async function persistAwaitingPaymentOrder(entity: Order) {
+  const orderData = entity;
+  if (orderData.status !== "awaiting_payment") throw new OrderActionError("INVALID_INPUT", "Expected a new checkout order.");
+  const now = orderData.createdAt;
+  const normalizedItems = orderData.items;
   const products = new Map<string, Record<string, any>>();
-  for (const line of snapshot.items) {
+  for (const line of orderData.items) {
     const product = await readProductRecord(line.productId);
     if (!product || Number(product.version ?? 0) !== line.version) {
       throw new OrderActionError('CONFLICT', 'Inventory changed. Please refresh and retry checkout.');
     }
     products.set(line.productId, product);
   }
-  const lines: StorefrontOrderItemRecord[] = snapshot.items.map(({ version: _version, stock: _stock, ...line }) => ({
-    ...buildOrderItemKey(snapshot.id, line.productId), entityType: "ORDER_ITEM",
-    orderId: snapshot.id, customerEmail: snapshot.customerEmail, ...line,
-    createdAt: snapshot.createdAt, updatedAt: snapshot.updatedAt
+  const lines: StorefrontOrderItemRecord[] = orderData.items.map(({ version: _version, ...line }) => ({
+    ...buildOrderItemKey(orderData.id, line.productId), entityType: "ORDER_ITEM",
+    orderId: orderData.id, customerEmail: orderData.customerEmail, ...line,
+    createdAt: orderData.createdAt, updatedAt: orderData.updatedAt
   }));
   const order: StorefrontAwaitingPaymentOrderRecord = {
-    ...buildOrderMetaKey(snapshot.id),
+    ...buildOrderMetaKey(orderData.id),
     entityType: "ORDER",
-    customerEmail: snapshot.customerEmail,
-    status: snapshot.status,
-    totalAmount: snapshot.totalAmount,
-    itemCount: snapshot.itemCount,
-    lockedUntil: snapshot.lockedUntil,
-    checkoutBankCode: snapshot.checkoutBankCode, checkoutLocale: snapshot.checkoutLocale,
+    customerEmail: orderData.customerEmail,
+    status: orderData.status,
+    totalAmount: orderData.totalAmount,
+    itemCount: orderData.itemCount,
+    lockedUntil: orderData.lockedUntil,
+    checkoutBankCode: orderData.checkoutBankCode, checkoutLocale: orderData.checkoutLocale,
     createdAt: now,
     updatedAt: now,
     ...serviceAuditMetadata({
       actorId: "service:checkout-api",
       source: "CHECKOUT_API",
       reason: "order_created",
-      requestId: snapshot.id
+      requestId: orderData.id
     })
   };
 
@@ -382,7 +384,7 @@ export async function transitionAwaitingPaymentOrder(input: {
     ? (await getPaymentSessionByTxnRef(order.paymentTxnRef))?.status === 'success' : false;
   const decision = new Order({ ...order, id: input.orderId }).checkoutTransition(input, now, paymentSucceeded);
   if (!decision.changed) return { order, items: decision.loadItems ? await listOrderItems(input.orderId) : [], changed: false };
-  const next = decision.order.toSnapshot();
+  const next = decision.order;
   const items = await listOrderItems(input.orderId);
   if (items.length === 0) throw new Error("Order has no held items");
   const isPaymentSuccess = input.status === "paid";

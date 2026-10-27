@@ -1,5 +1,4 @@
 import type { CheckoutOrders, CheckoutLog } from "../ports/checkout-ports.js";
-import { Order } from "../../domain/order.js";
 
 export class ExpireOrders {
   constructor(private readonly orders: CheckoutOrders, private readonly log: CheckoutLog,
@@ -13,7 +12,7 @@ export class ExpireOrders {
         // GSI results can be stale; the transaction rechecks state and deadline.
         const current = await this.orders.findById(orderId);
         if (!current) continue;
-        const result = await this.orders.transition({ order: new Order(current), status: "expired", expiresBefore: checkedAt });
+        const result = await this.orders.transition({ order: current, status: "expired", expiresBefore: checkedAt });
         if (result.changed) releasedCount++;
       } catch (error) { failed++; this.log.error("order.expiry_failed", { orderId, error: String(error) }); }
     }
