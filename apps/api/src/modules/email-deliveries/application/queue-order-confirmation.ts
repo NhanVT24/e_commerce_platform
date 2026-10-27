@@ -1,4 +1,5 @@
 import type { ConfirmationMail } from "../domain/email-jobs.js";
+import { EmailRoute } from "../domain/email-route.js";
 import type { EmailAdministrationPorts } from "./ports.js";
 export class QueueOrderConfirmation {
     constructor(private readonly ports: Pick<EmailAdministrationPorts, "ensureEmailRoute" | "markEmailRoutePublished" | "markEmailRoutePublishRetry" | "nextEmailPublishRetryAt" | "publishEventBridgeEvent">, private readonly enabled: boolean, private readonly hash: (value: string) => string) { }
@@ -22,7 +23,7 @@ export class QueueOrderConfirmation {
             detailType: "email.order_confirmation.requested",
             detail
         };
-        const created = await this.ports.ensureEmailRoute({ emailJobId, campaignId, batchIndex: 0, batchCount: 1, event });
+        const created = await this.ports.ensureEmailRoute(EmailRoute.create({ emailJobId, campaignId, batchIndex: 0, batchCount: 1, event }, Date.now()));
         if (!created)
             return { emailJobId, status: "already_queued" as const };
         try {

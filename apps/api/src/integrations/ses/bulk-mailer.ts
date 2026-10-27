@@ -1,3 +1,5 @@
+import { EmailDelivery } from "../../modules/email-deliveries/domain/email-delivery.js";
+import { randomUUID as newDeliveryId } from "node:crypto";
 import { GetAccountCommand, GetEmailIdentityCommand, SendBulkEmailCommand, SendEmailCommand } from "@aws-sdk/client-sesv2";
 import crypto from "node:crypto";
 import { emailConfig } from "../../config/email-config.js";
@@ -112,10 +114,10 @@ export async function sendSharedEmail(input: SharedEmailInput) {
   if (recipients.length > maxRecipientsPerSend) throw new Error("A shared SES email may have at most 50 recipients.");
   let created: Awaited<ReturnType<typeof createPendingEmailDeliveryBatch>>;
   try {
-    created = await createPendingEmailDeliveryBatch({
+    created = await createPendingEmailDeliveryBatch(EmailDelivery.create({
       emailType: input.emailType, senderEmail: input.senderEmail, subject: input.subject,
       recipients: recipients.map(({ email, type }) => ({ email, type })), relatedId: input.relatedId, emailId: input.emailId, html: input.html, text: input.text
-    });
+    }, newDeliveryId, Date.now()));
   } catch (error) {
     if (input.emailId && (error as { name?: string } | undefined)?.name === "TransactionCanceledException") {
       return { emailId: input.emailId, status: "already_processed" as const, skipped: [] };
@@ -223,10 +225,10 @@ export async function sendBulkSaleEmailBatch(input: BulkSaleEmailBatchInput): Pr
 
   let created: Awaited<ReturnType<typeof createPendingEmailDeliveryBatch>>;
   try {
-    created = await createPendingEmailDeliveryBatch({
+    created = await createPendingEmailDeliveryBatch(EmailDelivery.create({
       emailType: "sale_campaign", senderEmail: input.senderEmail, subject: input.subject,
       recipients: recipientEmails.map((email) => ({ email })), relatedId: input.relatedId, emailId: input.emailId, html: input.html, text: input.text
-    });
+    }, newDeliveryId, Date.now()));
   } catch (error) {
     // The conditional write is the idempotency barrier for EventBridge/SQS
     // at-least-once delivery. Do not issue another SES request on a duplicate.

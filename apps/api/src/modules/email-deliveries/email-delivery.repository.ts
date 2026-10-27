@@ -1,4 +1,6 @@
-import crypto from "node:crypto";
+import type { EmailDelivery, PendingEmailMeta, PendingEmailRecipient } from "./domain/email-delivery.js";
+import type { EmailType } from "./domain/email-delivery.js";
+export type { EmailType } from "./domain/email-delivery.js";
 import { ConditionalCheckFailedException, GetItemCommand, QueryCommand, TransactWriteItemsCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { feedbackUpdate, type FeedbackStatus } from "./email-feedback.js";
@@ -8,7 +10,6 @@ import { rawDb } from "../../database/dynamodb/client.js";
 const TableName = databaseConfig.DYNAMODB_TABLE_NAME;
 
 export type EmailDeliveryStatus = "pending" | "accepted" | "delivered" | "bounced" | "complained" | "rejected" | "delivery_delayed" | "failed" | "not_sent" | "unknown";
-export type EmailType = "inventory_daily_report" | "order_confirmation" | "payment_failure" | "order_failure" | "refund_status" | "sale_campaign" | "account_welcome";
 
 export type EmailDeliveryMeta = {
   PK: string; SK: "META"; entityType: "EMAIL"; id: string; emailType: EmailType;
@@ -57,58 +58,22 @@ export function sesTrackingTags(input: { emailId: string; recipientId?: string; 
   return tags;
 }
 
-export async function createPendingEmailDeliveryBatch(input: {
-  emailType: EmailType; senderEmail: string; subject: string;
-  recipients: Array<{ email: string; type?: "to" | "cc" | "bcc" }>;
-  reportId?: string; relatedId?: string; emailId?: string; html?: string; text?: string;
-}) {
-  // SES accepts at most 50 recipients in a send. Larger campaigns are split
-  // into independent bulk attempts by bulk-mailer.ts.
-  if (input.recipients.length === 0 || input.recipients.length > 50) throw new Error("An email batch must contain from 1 to 50 recipients.");
-  const normalized = input.recipients.map((recipient) => ({ email: recipient.email.trim().toLowerCase(), type: recipient.type ?? "to" }));
-  if (normalized.some((recipient) => !recipient.email)) throw new Error("Recipient email is required.");
-  if (new Set(normalized.map((recipient) => recipient.email)).size !== normalized.length) throw new Error("A recipient may appear only once in an email batch.");
-
-  const now = new Date().toISOString();
-  const emailId = input.emailId ?? crypto.randomUUID();
-  const meta: EmailDeliveryMeta = {
-    ...metaKey(emailId), entityType: "EMAIL", id: emailId, emailType: input.emailType,
-    senderEmail: input.senderEmail, subject: input.subject, recipientCount: normalized.length, sendStatus: "pending",
-    reportId: input.reportId, relatedId: input.relatedId, html: input.html, text: input.text, createdAt: now, updatedAt: now
-  };
-  const recipients: EmailDeliveryRecord[] = normalized.map((recipient) => {
-    const recipientId = crypto.randomUUID();
-    return {
-      ...recipientKey(emailId, recipientId), entityType: "EMAIL_RECIPIENT", recipientId,
-      recipientEmail: recipient.email, recipientType: recipient.type, status: "pending", updatedAt: now
-    };
-  });
-  await rawDb.send(new TransactWriteItemsCommand({
-    TransactItems: [meta, ...recipients].map((record) => ({ Put: {
-      TableName, Item: item(record), ConditionExpression: "attribute_not_exists(PK) AND attribute_not_exists(SK)"
-    } }))
+export async function createPendingEmailDeliveryBatch(entity: EmailDelivery<PendingEmailMeta, PendingEmailRecipient>) {
+  const snapshot = entity.toSnapshot();
+  const meta: EmailDeliveryMeta = { ...metaKey(snapshot.meta.id), entityType: 'EMAIL', ...snapshot.meta };
+  const recipients: EmailDeliveryRecord[] = snapshot.recipients.map(recipient => ({
+    ...recipientKey(meta.id, recipient.recipientId), entityType: 'EMAIL_RECIPIENT', ...recipient
   }));
+  await rawDb.send(new TransactWriteItemsCommand({ TransactItems: [meta, ...recipients].map(record => ({ Put: {
+    TableName, Item: item(record), ConditionExpression: 'attribute_not_exists(PK) AND attribute_not_exists(SK)'
+  } })) }));
   return { meta, recipients };
 }
 
-// Existing transactional email callers keep their API. Its emailId and recipientId are deliberately equal.
-export async function createPendingEmailDelivery(input: {
-  emailType: EmailType; recipientEmail: string; senderEmail: string; subject: string; reportId?: string; relatedId?: string; emailId?: string;
-}) {
-  const emailId = input.emailId ?? crypto.randomUUID();
-  const now = new Date().toISOString();
-  const meta: EmailDeliveryMeta = {
-    ...metaKey(emailId), entityType: "EMAIL", id: emailId, emailType: input.emailType, senderEmail: input.senderEmail,
-    subject: input.subject, recipientCount: 1, sendStatus: "pending", reportId: input.reportId, relatedId: input.relatedId, createdAt: now, updatedAt: now
-  };
-  const record: EmailDeliveryRecord = {
-    ...recipientKey(emailId, emailId), entityType: "EMAIL_RECIPIENT", recipientId: emailId,
-    recipientEmail: input.recipientEmail.trim().toLowerCase(), recipientType: "to", status: "pending", updatedAt: now
-  };
-  await rawDb.send(new TransactWriteItemsCommand({ TransactItems: [meta, record].map((value) => ({ Put: {
-    TableName, Item: item(value), ConditionExpression: "attribute_not_exists(PK) AND attribute_not_exists(SK)"
-  } })) }));
-  return { ...record, id: emailId, emailId, emailType: input.emailType } satisfies CreatedEmailDelivery;
+export async function createPendingEmailDelivery(entity: EmailDelivery<PendingEmailMeta, PendingEmailRecipient>) {
+  if (entity.toSnapshot().recipients.length !== 1) throw new Error('Single email delivery requires one recipient');
+  const { meta, recipients } = await createPendingEmailDeliveryBatch(entity);
+  return { ...recipients[0], id: meta.id, emailId: meta.id, emailType: meta.emailType } satisfies CreatedEmailDelivery;
 }
 
 export async function markEmailAccepted(emailId: string, sesMessageId: string) {
