@@ -276,7 +276,7 @@ test("engine: legacy completion commits status/audit together and never creates 
     ExpressionAttributeValues: marshall({ ":pk": `ORDER#${id}`, ":prefix": "DETAIL#STATUS_CHANGE#" }) }));
   assert.equal(audit.Items.length, 1);
   const rejected = randomUUID(); await put({ PK: `ORDER#${rejected}`, SK: "DETAIL", status: "cancelled" });
-  await assert.rejects(adapter.completePending(new Order({ id: rejected, customerEmail: email, status: "done" })), { name: "TransactionCanceledException" });
+  await assert.rejects(adapter.completePending(new Order({ id: rejected, customerEmail: email, totalAmount: 0, status: "done" })), { name: "TransactionCanceledException" });
   assert.equal(await read(`ORDER#${rejected}`, "DETAIL#STATUS_CHANGE#done"), null);
 });
 
@@ -300,9 +300,9 @@ test("engine: recovery checkpoint progresses across a filtered-empty GSI page an
 });
 
 async function holdCheckout(orders, input) {
-  let order = await orders.findForReplay(input.orderId);
-  if (order) order.assertCheckoutReplay(input.email, input.items, order.toSnapshot().items, new Date().toISOString());
-  else order = await orders.hold(Order.create({ id: input.orderId, customerEmail: input.email, items: input.items,
+  let order = await orders.findById(input.orderId);
+  if (order) order.assertCheckoutReplay(input.email, input.items, order.items, new Date().toISOString());
+  else order = await orders.create(Order.create({ id: input.orderId, customerEmail: input.email, items: input.items,
     products: await orders.loadPrices(input.items), holdSeconds: input.holdSeconds, now: Date.now() }));
-  return { order: order.toSnapshot(), items: order.toSnapshot().items };
+  return { order: order, items: order.items };
 }

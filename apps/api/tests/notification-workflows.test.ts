@@ -1,3 +1,4 @@
+import { Order } from "../src/modules/storefront/domain/order.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { checkoutFixture } from "./helpers/checkout-fixture.js";
@@ -24,7 +25,7 @@ function setup(config: Partial<NotificationConfig> = {}) {
   const confirmations: Array<Parameters<NotificationEffects["orderConfirmation"]>[0]> = [];
   const reviews: PaymentReview[] = [], deleted: string[] = [];
   const legacy: NotifiedOrders = {
-    async findById() { events.push("legacy:find"); return { customerEmail: customer, status: "pending" }; },
+    async findById() { events.push("legacy:find"); return new Order({ id: "order-1", customerEmail: customer, status: "pending", totalAmount: 2000 }); },
     async hasSentSystemNotification() { events.push("legacy:sent-check"); return true; },
     async completePending() { events.push("legacy:complete"); return true; }
   };

@@ -6,11 +6,11 @@ import type { CheckoutItem } from "../../src/modules/storefront/domain/checkout.
 export async function holdCheckout(orders: CheckoutOrders, input: {
   orderId: string; email: string; items: CheckoutItem[]; holdSeconds: number; bankCode?: string; locale?: "vn" | "en";
 }) {
-  let entity = await orders.findForReplay(input.orderId);
-  if (entity) entity.assertCheckoutReplay(input.email, input.items, entity.toSnapshot().items, new Date().toISOString());
-  else entity = await orders.hold(Order.create({ id: input.orderId, customerEmail: input.email, items: input.items,
+  let entity = await orders.findById(input.orderId);
+  if (entity) entity.assertCheckoutReplay(input.email, input.items, entity.items, new Date().toISOString());
+  else entity = await orders.create(Order.create({ id: input.orderId, customerEmail: input.email, items: input.items,
     products: await orders.loadPrices(input.items), now: Date.now(), holdSeconds: input.holdSeconds, bankCode: input.bankCode, locale: input.locale }));
-  const snapshot = entity.toSnapshot();
+  const snapshot = entity;
   return { order: snapshot, items: snapshot.items };
 }
 export async function transitionCheckout(orders: CheckoutOrders, input: Omit<Parameters<CheckoutOrders["transition"]>[0], "order"> & { orderId: string }) {

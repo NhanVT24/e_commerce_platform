@@ -38,7 +38,7 @@ test("checkout rejects stale price/version between domain construction and persi
       products: await orders.loadPrices(items), now: Date.now(), holdSeconds: 300 });
     const current = db.get(`PRODUCT#${productId}`, "DETAIL")!;
     db.put({ ...current, price: 2000, version: current.version + 1 });
-    await assert.rejects(orders.hold(entity), { code: "CONFLICT" });
+    await assert.rejects(orders.create(entity), { code: "CONFLICT" });
     assert.equal(db.get(`ORDER#${id}`), undefined);
     assert.equal(db.get(`PRODUCT#${productId}`, "DETAIL")?.stock, 12);
   } finally { db.close(); }
@@ -122,10 +122,11 @@ test("checkout item policy rejects fractions, empty carts and merged quantity ov
 
 test("checkout keeps the hold on ambiguous payment failure instead of compensating a concurrent winner", async () => {
   const calls: string[] = [];
+  let exists = false;
   const held = { id, customerEmail: email, status: "awaiting_payment" as const, totalAmount: 2000, lockedUntil: "future" };
-  const orders = { async findForReplay() { return null; }, async loadPrices() { return [{ ...items[0], productName: "P", unitPrice: 1000 }]; }, async hold() { calls.push("hold"); return new Order({ ...held, items: [{ ...items[0], productName: "P", unitPrice: 1000, lineTotal: 2000 }] }); },
+  const orders = { async loadPrices() { return [{ ...items[0], productName: "P", unitPrice: 1000 }]; }, async create() { exists = true; calls.push("hold"); return new Order({ ...held, items: [{ ...items[0], productName: "P", unitPrice: 1000, lineTotal: 2000 }] }); },
     async transition() { calls.push("release"); throw new Error("release unavailable"); }, async attachPayment() { calls.push("attach"); },
-    async findById() { return held; }, async *expiredCandidates() {} };
+    async findById() { return exists ? new Order(held) : null; }, async *expiredCandidates() {} };
   const useCase = new CreateCheckout(orders, { async create() { calls.push("payment"); throw new Error("payment unavailable"); } },
     { error(event) { calls.push(event); } }, () => id);
   await assert.rejects(useCase.execute(email, { items }), /payment unavailable/);
@@ -147,8 +148,8 @@ test("payment creation trusts committed checkout price and validates amount/expi
 test("expiry continues after a per-order failure and passes an exact deadline to the transaction", async () => {
   const useCase = new ExpireOrders({ async *expiredCandidates() { yield "a"; yield "b"; },
     async transition(input) { assert.equal(input.expiresBefore, new Date(clock).toISOString());
-      if (input.order.toSnapshot().id === "a") throw new Error("contention"); return { changed: true, order: null!, items: [] }; },
-    async findForReplay() { return null; }, async loadPrices() { return []; }, async hold() { throw new Error("unused"); }, async findById(id) { return { id, customerEmail: email, status: "awaiting_payment", totalAmount: 2000, lockedUntil: new Date(clock).toISOString() }; }, async attachPayment() {} }, log, () => clock);
+      if (input.order.id === "a") throw new Error("contention"); return { changed: true, order: null!, items: [] }; },
+    async loadPrices() { return []; }, async create() { throw new Error("unused"); }, async findById(id) { return new Order({ id, customerEmail: email, status: "awaiting_payment", totalAmount: 2000, lockedUntil: new Date(clock).toISOString() }); }, async attachPayment() {} }, log, () => clock);
   assert.deepEqual(await useCase.execute(), { ok: false, releasedCount: 1, failed: 1, checkedAt: new Date(clock).toISOString() });
 });
 
@@ -166,10 +167,15 @@ test("inventory builder atomically mirrors status/counters and prevents duplicat
   assert.throws(() => inventoryTransaction(product, { stock: -2, sold: 0 }, new Date(clock).toISOString()));
 });
 
-test("SDK checkout hold/cancel preserve snapshot and duplicate request cannot deduct stock twice", async () => {
+test("SDK checkout create/find/cancel return Order entities and replay cannot deduct stock twice", async () => {
   const db = transport(rawDb), orders = new DynamoCheckoutOrders();
   try {
     await holdCheckout(orders, { orderId: id, email, items, holdSeconds: 300 });
+    const order = await orders.findById(id);
+    assert.ok(order instanceof Order);
+    order.assertOwnedBy(email);
+    assert.equal(order.items[0].unitPrice, 1000);
+    assert.equal("PK" in order, false);
     assert.equal(db.get(`PRODUCT#${productId}`, "DETAIL")?.stock, 10);
     assert.equal(db.get(`PRODUCT#${productId}`, "DETAIL")?.status, "low_stock");
     assert.equal((await holdCheckout(orders, { orderId: id, email, items, holdSeconds: 300 })).order.id, id);

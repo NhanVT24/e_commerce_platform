@@ -78,7 +78,7 @@ test("Order.create owns new checkout state, merged lines, backend prices and hol
     products: [{ productId: "one", productName: "One", unitPrice: 1000, originalUnitPrice: 1200 }] };
   const order = Order.create(input);
   input.products[0].unitPrice = 1; input.items[0].quantity = 50;
-  const snapshot = order.toSnapshot();
+  const snapshot = order;
   assert.equal(snapshot.status, "awaiting_payment");
   assert.equal(snapshot.totalAmount, 5000);
   assert.equal(snapshot.itemCount, 1);
@@ -87,8 +87,8 @@ test("Order.create owns new checkout state, merged lines, backend prices and hol
   assert.deepEqual(snapshot.items, [{ productId: "one", productName: "One", unitPrice: 1000,
     originalUnitPrice: 1200, quantity: 5, lineTotal: 5000 }]);
   Reflect.set(snapshot.items[0], "unitPrice", 0);
-  assert.equal(order.toSnapshot().items[0].unitPrice, 1000);
-  const restored = new Order(order.toSnapshot());
+  assert.equal(order.items[0].unitPrice, 1000);
+  const restored = new Order(order);
   assert.equal(restored.matchesPayment({ email: input.customerEmail, amount: 5000, txnRef: "absent" }), false);
 });
 
@@ -141,7 +141,7 @@ test("InventoryAlertDelivery bounds retries and preserves event identity across 
 });
 
 test("Order checkout replay requires identical owner/items, usable linkage and an unexpired hold", () => {
-  const snapshot = { id: "order", customerEmail: "owner@test.com", status: "awaiting_payment",
+  const snapshot = { id: "order", customerEmail: "owner@test.com", totalAmount: 2000, status: "awaiting_payment" as const,
     lockedUntil: new Date(now + 300000).toISOString() };
   const lines = [{ productId: "one", quantity: 2 }, { productId: "two", quantity: 1 }];
   const order = new Order(snapshot);
@@ -151,12 +151,12 @@ test("Order checkout replay requires identical owner/items, usable linkage and a
     .assertCheckoutReplay(snapshot.customerEmail, lines, lines, time);
   assert.throws(() => order.assertCheckoutReplay("other@test.com", lines, lines, time), { code: "CONFLICT" });
   assert.throws(() => order.assertCheckoutReplay(snapshot.customerEmail, [{ productId: "one", quantity: 3 }], lines, time), { code: "CONFLICT" });
-  for (const patch of [{ paymentTxnRef: "payment" }, { paymentUrl: "https://payment.test" }, { status: "paid" }, { lockedUntil: time }]) {
+  for (const patch of [{ paymentTxnRef: "payment" }, { paymentUrl: "https://payment.test" }, { status: "paid" }, { lockedUntil: time }] as const) {
     assert.throws(() => new Order({ ...snapshot, ...patch }).assertCheckoutReplay(snapshot.customerEmail, lines, lines, time), { code: "CONFLICT" });
   }
   assert.equal(order.isCheckoutExpiredAt(snapshot.lockedUntil), true);
   assert.equal(new Order({ ...snapshot, status: "paid" }).isCheckoutExpiredAt(snapshot.lockedUntil), false);
-  assert.equal(order.toSnapshot().status, "awaiting_payment");
+  assert.equal(order.status, "awaiting_payment");
 });
 
 test("Product rehydration creates real methods; snapshots do not share mutable entity state", () => {
@@ -230,17 +230,17 @@ test("Order owns hidden ownership, refund window, correlation and pending claim 
   assert.equal(order.matchesRefundPayment({ amount: 1000, status: "success", orderId: "other" }), false);
   assert.equal(order.matchesRefundPayment({ amount: 1000, status: "success", orderId: "order" }), true);
   const claimed = order.claimRefund("stable-refund-id", now);
-  assert.equal(claimed.toSnapshot().refundRequestId, "stable-refund-id");
+  assert.equal(claimed.refundRequestId, "stable-refund-id");
   assert.equal(claimed.refundResponse().status, "refund_pending");
-  assert.equal(order.toSnapshot().status, "paid");
+  assert.equal(order.status, "paid");
   assert.throws(() => order.claimRefund("late", now + 300000), { code: "CONFLICT" });
 });
 
 test("OrderItems normalize duplicates and isolate constructor/output arrays", () => {
   const lines = [{ productId: "PRODUCT#one", quantity: 2 }, { productId: "one", quantity: 3 }];
   const cart = OrderItems.create(lines); lines[0].quantity = 50;
-  const output = cart.toSnapshot(); assert.deepEqual(output, [{ productId: "one", quantity: 5 }]);
-  output[0].quantity = 50; assert.equal(cart.toSnapshot()[0].quantity, 5);
+  const output = cart.toArray(); assert.deepEqual(output, [{ productId: "one", quantity: 5 }]);
+  output[0].quantity = 50; assert.equal(cart.toArray()[0].quantity, 5);
   assert.throws(() => OrderItems.create([{ productId: "one", quantity: 30 }, { productId: "one", quantity: 30 }]), /Maximum quantity/);
 });
 
@@ -305,7 +305,7 @@ test("Value object constructors copy input; explicit assertions enforce action-s
   assert.equal(change.avatarKey, "public/avatars/other/image");
   assert.throws(() => change.assertAllowed(), /not allowed/);
   const cart = new OrderItems([{ productId: "one", quantity: 0 }]);
-  assert.equal(cart.toSnapshot()[0].quantity, 0);
+  assert.equal(cart.toArray()[0].quantity, 0);
   assert.throws(() => cart.assertValid(), /Invalid checkout item/);
   const draft = new PaymentDraft([{ productId: "one", quantity: 0 }]);
   assert.throws(() => draft.assertValidItems(), /Invalid payment item/);

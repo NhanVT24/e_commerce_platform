@@ -1,4 +1,4 @@
-import { Order } from "../src/modules/storefront/domain/order.js";
+import { Order, type OrderStatus } from "../src/modules/storefront/domain/order.js";
 import "reflect-metadata";
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -105,8 +105,8 @@ test("Dynamo read adapters map legacy/checkout item prices without leaking persi
 });
 
 test("completion policy requires pending legacy order and sent system notification", async () => {
-  let status: string | null = null, sent = false, writes = 0;
-  const flow = new CompleteNotifiedOrder({ async findById() { return status ? { customerEmail: email, status } : null; },
+  let status: OrderStatus | null = null, sent = false, writes = 0;
+  const flow = new CompleteNotifiedOrder({ async findById() { return status ? new Order({ id: "order-1", customerEmail: email, totalAmount: 2000, status }) : null; },
     async hasSentSystemNotification() { return sent; }, async completePending() { writes++; status = "done"; return true; } });
   assert.equal((await flow.execute("order-1")).completed, false);
   status = "paid"; assert.equal((await flow.execute("order-1")).completed, false);
@@ -133,7 +133,7 @@ test("competing completions write one atomic status audit and preserve done on r
   const db = transport(rawDb), adapter = new DynamoNotifiedOrders();
   try {
     db.put({ PK: "ORDER#order-1", SK: "DETAIL", ...order, status: "pending" });
-    const results = await Promise.all([adapter.completePending(new Order({ id: "order-1", customerEmail: "owner@example.test", status: "done" })), adapter.completePending(new Order({ id: "order-1", customerEmail: "owner@example.test", status: "done" }))]);
+    const results = await Promise.all([adapter.completePending(new Order({ id: "order-1", customerEmail: "owner@example.test", totalAmount: 2000, status: "done" })), adapter.completePending(new Order({ id: "order-1", customerEmail: "owner@example.test", totalAmount: 2000, status: "done" }))]);
     assert.equal(results.filter(Boolean).length, 1);
     assert.equal(db.get("ORDER#order-1", "DETAIL")?.status, "done");
     assert.equal(db.rows().filter(row => row.entityType === "ORDER_STATUS_AUDIT").length, 1);
@@ -145,11 +145,11 @@ test("completion acknowledges lost commit response but propagates failed transac
   const db = transport(rawDb), adapter = new DynamoNotifiedOrders();
   try {
     db.put({ PK: "ORDER#lost", SK: "DETAIL", ...order, status: "pending" });
-    db.loseNextTransactionResponse(); assert.equal(await adapter.completePending(new Order({ id: "lost", customerEmail: "owner@example.test", status: "done" })), false);
+    db.loseNextTransactionResponse(); assert.equal(await adapter.completePending(new Order({ id: "lost", customerEmail: "owner@example.test", totalAmount: 2000, status: "done" })), false);
     assert.equal(db.get("ORDER#lost", "DETAIL")?.status, "done");
     db.put({ PK: "ORDER#changed", SK: "DETAIL", ...order, status: "pending" });
     db.race(() => db.put({ PK: "ORDER#changed", SK: "DETAIL", ...order, status: "cancelled" }));
-    await assert.rejects(adapter.completePending(new Order({ id: "changed", customerEmail: "owner@example.test", status: "done" })));
+    await assert.rejects(adapter.completePending(new Order({ id: "changed", customerEmail: "owner@example.test", totalAmount: 2000, status: "done" })));
     assert.equal(db.get("ORDER#changed", "DETAIL#STATUS_CHANGE#done"), undefined);
   } finally { db.close(); }
 });
