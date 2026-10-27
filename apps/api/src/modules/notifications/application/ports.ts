@@ -1,4 +1,5 @@
 import type { InventoryNotifications } from "./ports/inventory-notifications.js";
+import type { Notification, NewNotificationSnapshot } from "../domain/notification.js";
 export interface NotificationRecord {
     id: string;
     customerEmail: string;
@@ -35,16 +36,10 @@ export interface NotificationConfig {
     adminEmail?: string;
 }
 export interface NotificationEffects {
+    newId(): string;
     inventory?: InventoryNotifications;
     store: {
-        createNotification(input: {
-            email: string;
-            title: string;
-            message: string;
-            channel: "email" | "system";
-            status: "pending";
-            metadata?: Record<string, unknown>;
-        }): Promise<NotificationRecord>;
+        createNotification(entity: Notification<NewNotificationSnapshot>): Promise<NotificationRecord>;
         deleteNotification(id: string): Promise<boolean>;
         deleteNotifications(ids: string[]): Promise<void>;
         listAllNotifications(): Promise<NotificationRecord[]>;

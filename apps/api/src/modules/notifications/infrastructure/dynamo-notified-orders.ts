@@ -27,7 +27,9 @@ export class DynamoNotifiedOrders implements NotifiedOrders {
     } while (cursor);
     return false;
   }
-  async completePending(id: string) {
+  async completePending(entity: Parameters<NotifiedOrders["completePending"]>[0]) {
+    const { id, status } = entity.toSnapshot();
+    if (status !== "done") throw new Error("Expected a completed order entity");
     const now = new Date().toISOString();
     try {
       await rawDb.send(new TransactWriteItemsCommand({ TransactItems: [

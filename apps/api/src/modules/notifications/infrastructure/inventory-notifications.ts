@@ -8,15 +8,16 @@ import type { InventoryNotifications } from "../application/ports/inventory-noti
 const item = (value: Record<string, unknown>) => marshall(value, { removeUndefinedValues: true });
 const identity = (eventId: string, email: string) => createHash("sha256").update(JSON.stringify([eventId, email.trim().toLowerCase()])).digest("hex");
 export class DynamoInventoryNotifications implements InventoryNotifications {
+  notificationId(eventId: string, email: string) { return `inventory-${identity(eventId, email)}`; }
   async createOnce(input: Parameters<InventoryNotifications["createOnce"]>[0]) {
-    const id = identity(input.eventId, input.email), notificationId = `inventory-${id}`, owner = randomUUID(), now = new Date().toISOString();
+    const notification = input.notification.toSnapshot();
+    const id = identity(input.eventId, notification.customerEmail), notificationId = this.notificationId(input.eventId, notification.customerEmail), owner = randomUUID(), now = new Date().toISOString();
+    if (notification.id !== notificationId) throw new Error("Inventory notification identity does not match its event");
     const receipt = { PK: `INVENTORY_ALERT_RECEIPT#${id}`, SK: "DETAIL" };
     try {
       await rawDb.send(new TransactWriteItemsCommand({ TransactItems: [
         { Put: { TableName: databaseConfig.DYNAMODB_TABLE_NAME, ConditionExpression: "attribute_not_exists(PK)", Item: item({
-          PK: `NOTIFICATION#${notificationId}`, SK: "DETAIL", entityType: "NOTIFICATION", id: notificationId,
-          customerEmail: input.email, title: input.title, message: input.message, channel: "system", status: "pending",
-          isRead: false, metadata: input.metadata, createdAt: now, updatedAt: now }) } },
+          PK: `NOTIFICATION#${notificationId}`, SK: "DETAIL", entityType: "NOTIFICATION", ...notification }) } },
         { Put: { TableName: databaseConfig.DYNAMODB_TABLE_NAME, ConditionExpression: "attribute_not_exists(PK)", Item: item({ ...receipt,
           entityType: "INVENTORY_ALERT_RECEIPT", eventId: input.eventId, notificationId, owner,
           effectsState: "IN_PROGRESS", createdAt: now, updatedAt: now }) } }

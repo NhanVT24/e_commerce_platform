@@ -2,7 +2,7 @@ export interface NotifiedOrders {
   findById(id: string): Promise<{ customerEmail: string; status: string } | null>;
   hasSentSystemNotification(orderId: string, customerEmail: string): Promise<boolean>;
   /** Conditional pending -> done and its status audit must commit atomically. */
-  completePending(id: string): Promise<boolean>;
+  completePending(order: Order): Promise<boolean>;
 }
 
 /** Legacy fulfillment rule; this does not settle a checkout payment. */
@@ -14,7 +14,7 @@ export class CompleteNotifiedOrder {
     const entity = new Order({ id, ...order });
     if (!entity.isAwaitingLegacyCompletion) return { changed: false, completed: entity.isLegacyCompleted };
     if (!entity.canCompleteLegacyNotification(await this.orders.hasSentSystemNotification(id, order.customerEmail))) return { changed: false, completed: false };
-    return { changed: await this.orders.completePending(id), completed: true };
+    return { changed: await this.orders.completePending(entity.completeLegacyAfterNotification(true)), completed: true };
   }
 }
 import { Order } from "../../storefront/domain/order.js";
